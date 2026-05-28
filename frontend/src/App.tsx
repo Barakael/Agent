@@ -1,4 +1,5 @@
 import { BrowserRouter, Route, Routes, Navigate } from 'react-router-dom'
+import type { ReactNode } from 'react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import LoginPage from './pages/Auth/Login'
 import RegisterPage from './pages/Auth/Register'
@@ -6,7 +7,7 @@ import DashboardPage from './pages/Dashboard'
 import ChatPage from './pages/Chat'
 import './App.css'
 
-function ProtectedRoute({ children }: { children: JSX.Element }) {
+function ProtectedRoute({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth()
 
   if (loading) {

@@ -34,6 +34,10 @@ class Settings(BaseSettings):
         os.path.dirname(os.path.dirname(__file__)),
     )
     CURSOR_TERMINALS_DIR: str = os.getenv("CURSOR_TERMINALS_DIR", "")
+    CURSOR_API_KEY: str = os.getenv("CURSOR_API_KEY", "")
+    CURSOR_MODEL: str = os.getenv("CURSOR_MODEL", "composer-2.5")
+    CURSOR_PROJECT_CWD: str = os.getenv("CURSOR_PROJECT_CWD", os.getenv("AGENT_PROJECT_ROOT", os.path.dirname(os.path.dirname(__file__))))
+    CURSOR_PROMPT_TIMEOUT: int = int(os.getenv("CURSOR_PROMPT_TIMEOUT", "600"))
     ALLOWED_MEDIA_DIRS: str = os.getenv(
         "ALLOWED_MEDIA_DIRS",
         f"{os.path.expanduser('~/Documents')},{os.path.expanduser('~/Movies')},{os.path.expanduser('~/Downloads')}",
@@ -45,7 +49,8 @@ class Settings(BaseSettings):
     ALLOWED_TOOL_ACTIONS: str = os.getenv(
         "ALLOWED_TOOL_ACTIONS",
         "browser.navigate,browser.read,browser.type,browser.click,browser.search,"
-        "file.read,file.write,terminal.exec,system.inspect,media.play,media.search",
+        "file.read,file.write,terminal.exec,system.inspect,media.play,media.search,"
+        "cursor.prompt,cursor.resume",
     )
 
     class Config:

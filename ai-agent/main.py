@@ -1,12 +1,23 @@
 import logging
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from config import settings
-from models.schemas import ChatRequestSchema, ChatResponseSchema, HealthCheckSchema
+from models.schemas import (
+    ChatRequestSchema,
+    ChatResponseSchema,
+    HealthCheckSchema,
+    TaskExecuteRequestSchema,
+    TaskExecuteResponseSchema,
+    TaskPlanRequestSchema,
+    TaskPlanResponseSchema,
+    TaskStatusResponseSchema,
+    ToolExecutionRequestSchema,
+    ToolExecutionResponseSchema,
+)
 from services.ai_service import AIService
 
 logging.basicConfig(
@@ -39,6 +50,15 @@ def validate_api_key(
         or credentials.credentials != settings.AI_SERVICE_API_KEY
     ):
         raise HTTPException(status_code=401, detail="Unauthorized")
+    return True
+
+
+def validate_approval_token(approval_token: str | None) -> bool:
+    if not settings.TOOL_APPROVAL_TOKEN:
+        logger.error("TOOL_APPROVAL_TOKEN is not configured")
+        raise HTTPException(status_code=503, detail="Approval token workflow not configured")
+    if approval_token != settings.TOOL_APPROVAL_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid approval token")
     return True
 
 @app.on_event("startup")
@@ -90,6 +110,65 @@ async def chat(request: ChatRequestSchema, auth: bool = Depends(validate_api_key
     except Exception as exc:
         logger.exception("Failed to process chat request")
         raise HTTPException(status_code=502, detail="AI API request failed")
+
+
+@app.post("/tasks/plan", response_model=TaskPlanResponseSchema)
+async def plan_task(request: TaskPlanRequestSchema, auth: bool = Depends(validate_api_key)):
+    ai_service: AIService = getattr(app.state, "ai_service", None)
+    if ai_service is None:
+        raise HTTPException(status_code=503, detail="AI service not available")
+    return TaskPlanResponseSchema(**ai_service.plan_task(goal=request.goal, context=request.context))
+
+
+@app.post("/tasks/execute", response_model=TaskExecuteResponseSchema)
+async def execute_task(request: TaskExecuteRequestSchema, auth: bool = Depends(validate_api_key)):
+    ai_service: AIService = getattr(app.state, "ai_service", None)
+    if ai_service is None:
+        raise HTTPException(status_code=503, detail="AI service not available")
+    return TaskExecuteResponseSchema(
+        **ai_service.execute_task(task_id=request.task_id, goal=request.goal, context=request.context)
+    )
+
+
+@app.get("/tasks/{task_id}", response_model=TaskStatusResponseSchema)
+async def task_status(task_id: str, auth: bool = Depends(validate_api_key)):
+    ai_service: AIService = getattr(app.state, "ai_service", None)
+    if ai_service is None:
+        raise HTTPException(status_code=503, detail="AI service not available")
+    return TaskStatusResponseSchema(**ai_service.get_task_status(task_id))
+
+
+@app.post("/tools/execute", response_model=ToolExecutionResponseSchema)
+async def execute_tool(
+    request: ToolExecutionRequestSchema,
+    auth: bool = Depends(validate_api_key),
+    approval_token: str | None = Header(default=None, alias="X-Approval-Token"),
+):
+    validate_approval_token(approval_token)
+    ai_service: AIService = getattr(app.state, "ai_service", None)
+    if ai_service is None:
+        raise HTTPException(status_code=503, detail="AI service not available")
+    try:
+        result = ai_service.execute_tool_action(
+            task_id=request.task_id,
+            tool=request.tool,
+            action=request.action,
+            payload=request.payload,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    return ToolExecutionResponseSchema(**result)
+
+
+@app.get("/traces/{trace_id}", response_class=JSONResponse)
+async def fetch_trace(trace_id: str, auth: bool = Depends(validate_api_key)):
+    ai_service: AIService = getattr(app.state, "ai_service", None)
+    if ai_service is None:
+        raise HTTPException(status_code=503, detail="AI service not available")
+    trace = ai_service.get_trace(trace_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="Trace not found")
+    return {"data": trace}
 
 if __name__ == "__main__":
     import uvicorn

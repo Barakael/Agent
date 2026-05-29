@@ -29,10 +29,23 @@ class Settings(BaseSettings):
     AI_SERVICE_API_KEY: str = os.getenv("AI_SERVICE_API_KEY", "")
     TOOL_APPROVAL_TOKEN: str = os.getenv("TOOL_APPROVAL_TOKEN", "")
     AGENT_WORKSPACE_DIR: str = os.getenv("AGENT_WORKSPACE_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), "workspace"))
-    AGENT_MAX_TOOL_ROUNDS: int = int(os.getenv("AGENT_MAX_TOOL_ROUNDS", "6"))
+    AGENT_PROJECT_ROOT: str = os.getenv(
+        "AGENT_PROJECT_ROOT",
+        os.path.dirname(os.path.dirname(__file__)),
+    )
+    CURSOR_TERMINALS_DIR: str = os.getenv("CURSOR_TERMINALS_DIR", "")
+    ALLOWED_MEDIA_DIRS: str = os.getenv(
+        "ALLOWED_MEDIA_DIRS",
+        f"{os.path.expanduser('~/Documents')},{os.path.expanduser('~/Movies')},{os.path.expanduser('~/Downloads')}",
+    )
+    AGENT_MAX_TOOL_ROUNDS: int = int(os.getenv("AGENT_MAX_TOOL_ROUNDS", "10"))
+    BROWSER_HEADLESS: bool = os.getenv("BROWSER_HEADLESS", "false").lower() == "true"
+    BROWSER_CHANNEL: str = os.getenv("BROWSER_CHANNEL", "chrome")
+    BROWSER_TIMEOUT: int = int(os.getenv("BROWSER_TIMEOUT", "30"))
     ALLOWED_TOOL_ACTIONS: str = os.getenv(
         "ALLOWED_TOOL_ACTIONS",
-        "browser.navigate,browser.read,file.read,file.write,terminal.exec",
+        "browser.navigate,browser.read,browser.type,browser.click,browser.search,"
+        "file.read,file.write,terminal.exec,system.inspect,media.play,media.search",
     )
 
     class Config:

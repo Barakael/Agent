@@ -1,8 +1,14 @@
 <?php
 
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\ActivityController;
 use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\MessageController;
+use App\Http\Controllers\MemoryController;
+use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\PermissionController;
+use App\Http\Controllers\SystemController;
+use App\Http\Controllers\TaskController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -18,8 +24,10 @@ use Illuminate\Support\Facades\Route;
 */
 
 // Public authentication routes
-Route::post('/auth/register', [AuthController::class, 'register']);
-Route::post('/auth/login', [AuthController::class, 'login']);
+Route::middleware('throttle:auth-login')->group(function () {
+    Route::post('/auth/register', [AuthController::class, 'register']);
+    Route::post('/auth/login', [AuthController::class, 'login']);
+});
 
 // Protected routes (require authentication via Sanctum)
 Route::middleware('auth:sanctum')->group(function () {
@@ -39,8 +47,42 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Message endpoints
     Route::get('/conversations/{conversation}/messages', [MessageController::class, 'index']);
-    Route::post('/conversations/{conversation}/messages', [MessageController::class, 'store']);
+    Route::post('/conversations/{conversation}/messages', [MessageController::class, 'store'])->middleware('throttle:high-cost-ai');
     Route::delete('/conversations/{conversation}/messages/{message}', [MessageController::class, 'destroy']);
+
+    // Task and execution endpoints
+    Route::get('/tasks', [TaskController::class, 'index']);
+    Route::post('/tasks', [TaskController::class, 'store']);
+    Route::get('/tasks/{task}', [TaskController::class, 'show']);
+    Route::get('/tasks/{task}/logs', [TaskController::class, 'logs']);
+    Route::put('/tasks/{task}', [TaskController::class, 'update']);
+    Route::post('/tasks/{task}/retry', [TaskController::class, 'retry']);
+    Route::post('/tasks/{task}/tools/execute', [TaskController::class, 'executeTool']);
+
+    // Activity and memory endpoints
+    Route::get('/activity-logs', [ActivityController::class, 'index']);
+    Route::get('/memories', [MemoryController::class, 'index']);
+    Route::post('/memories', [MemoryController::class, 'store']);
+    Route::put('/memories/{memory}', [MemoryController::class, 'update']);
+    Route::delete('/memories/{memory}', [MemoryController::class, 'destroy']);
+
+    // Notification endpoints
+    Route::get('/notifications', [NotificationController::class, 'index']);
+    Route::post('/notifications', [NotificationController::class, 'store']);
+    Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead']);
+    Route::post('/notifications/{notification}/read', [NotificationController::class, 'markRead']);
+
+    // Permission and approvals (write actions require admin role)
+    Route::get('/permissions', [PermissionController::class, 'index']);
+    Route::post('/permissions/approvals', [PermissionController::class, 'createApproval']);
+    Route::get('/permissions/approvals', [PermissionController::class, 'listApprovals']);
+    Route::post('/permissions/approvals/{approvalRequest}/decision', [PermissionController::class, 'decideApproval'])->middleware('role:admin');
+    Route::post('/permissions', [PermissionController::class, 'store'])->middleware('role:admin');
+    Route::put('/permissions/{permission}', [PermissionController::class, 'update'])->middleware('role:admin');
+    Route::delete('/permissions/{permission}', [PermissionController::class, 'destroy'])->middleware('role:admin');
+
+    // System status
+    Route::get('/system/health', [SystemController::class, 'health']);
 
     // User endpoint
     Route::get('/user', function (Request $request) {

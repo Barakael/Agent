@@ -1,8 +1,11 @@
+import json
 import logging
 import uuid
 from typing import List, Dict, Optional, Any
 from openai import OpenAI
 from config import settings
+from services.tool_executor import ToolExecutor
+from services.tools import AGENT_SYSTEM_PROMPT, AGENT_TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +24,7 @@ class AIService:
         self.reasoning_effort = settings.OPENAI_REASONING_EFFORT
         self.temperature = settings.OPENAI_TEMPERATURE
         self.max_tokens = settings.OPENAI_MAX_TOKENS
+        self.tool_executor = ToolExecutor()
         self.task_runs: Dict[str, Dict[str, Any]] = {}
         self.execution_traces: Dict[str, Dict[str, Any]] = {}
 
@@ -34,6 +38,7 @@ class AIService:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         reasoning_effort: Optional[str] = None,
+        use_tools: bool = False,
     ) -> Dict[str, Any]:
         token_limit = max_tokens if max_tokens is not None else self.max_tokens
         kwargs: Dict[str, Any] = {
@@ -41,8 +46,10 @@ class AIService:
             "messages": messages,
         }
 
-        if self._uses_reasoning_model():
+        if self._uses_reasoning_model() and not use_tools:
             kwargs["reasoning_effort"] = reasoning_effort or self.reasoning_effort
+            kwargs["max_completion_tokens"] = token_limit
+        elif self._uses_reasoning_model() and use_tools:
             kwargs["max_completion_tokens"] = token_limit
         else:
             kwargs["temperature"] = (
@@ -117,6 +124,139 @@ class AIService:
         except Exception as e:
             logger.error(f"Error calling OpenAI API: {str(e)}")
             raise
+
+    def agent_chat(
+        self,
+        messages: List[Dict[str, str]],
+        task_id: Optional[str] = None,
+        max_tool_rounds: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Run chat with OpenAI tool calling and local computer actions."""
+        task_id = task_id or str(uuid.uuid4())
+        rounds_limit = max_tool_rounds or settings.AGENT_MAX_TOOL_ROUNDS
+        tool_actions: List[Dict[str, Any]] = []
+
+        formatted_messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": AGENT_SYSTEM_PROMPT},
+        ]
+        formatted_messages.extend(
+            {"role": msg.get("role", "user"), "content": msg.get("content", "")}
+            for msg in messages
+            if msg.get("role") in {"user", "assistant"}
+        )
+
+        total_tokens = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        model_name = self.model
+        finish_reason = "stop"
+        final_response = ""
+
+        for round_index in range(rounds_limit):
+            logger.info(
+                "Agent chat round %s/%s for task %s",
+                round_index + 1,
+                rounds_limit,
+                task_id,
+            )
+
+            kwargs = self._build_completion_kwargs(
+                formatted_messages,
+                use_tools=True,
+            )
+            kwargs["tools"] = AGENT_TOOLS
+            kwargs["tool_choice"] = "auto"
+
+            response = self.client.chat.completions.create(**kwargs)
+            choice = response.choices[0]
+            assistant_message = choice.message
+            model_name = response.model
+            finish_reason = choice.finish_reason or "stop"
+
+            if response.usage:
+                total_tokens["prompt_tokens"] += response.usage.prompt_tokens or 0
+                total_tokens["completion_tokens"] += response.usage.completion_tokens or 0
+                total_tokens["total_tokens"] += response.usage.total_tokens or 0
+
+            tool_calls = assistant_message.tool_calls or []
+            if not tool_calls:
+                final_response = assistant_message.content or ""
+                break
+
+            formatted_messages.append(
+                {
+                    "role": "assistant",
+                    "content": assistant_message.content,
+                    "tool_calls": [
+                        {
+                            "id": tool_call.id,
+                            "type": tool_call.type,
+                            "function": {
+                                "name": tool_call.function.name,
+                                "arguments": tool_call.function.arguments,
+                            },
+                        }
+                        for tool_call in tool_calls
+                    ],
+                }
+            )
+
+            for tool_call in tool_calls:
+                if tool_call.function.name != "execute_tool":
+                    tool_result = {"error": f"Unknown tool '{tool_call.function.name}'."}
+                else:
+                    try:
+                        arguments = json.loads(tool_call.function.arguments or "{}")
+                        tool = str(arguments.get("tool", "")).strip()
+                        action = str(arguments.get("action", "")).strip()
+                        payload = arguments.get("payload") or {}
+                        execution = self.execute_tool_action(
+                            task_id=task_id,
+                            tool=tool,
+                            action=action,
+                            payload=payload,
+                        )
+                        tool_result = execution["output"]
+                        tool_actions.append(
+                            {
+                                "tool": tool,
+                                "action": action,
+                                "payload": payload,
+                                "output": tool_result,
+                                "trace_id": execution.get("trace_id"),
+                            }
+                        )
+                    except Exception as exc:
+                        logger.exception("Tool execution failed")
+                        tool_result = {"error": str(exc)}
+
+                formatted_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": json.dumps(tool_result),
+                    }
+                )
+        else:
+            final_response = (
+                "I reached the maximum number of tool steps for this request. "
+                "Please ask me to continue or simplify the task."
+            )
+            finish_reason = "max_tool_rounds"
+
+        if not final_response:
+            final_response = "I completed the requested actions."
+
+        return {
+            "response": final_response,
+            "model": model_name,
+            "tokens_used": total_tokens,
+            "tool_actions": tool_actions,
+            "metadata": {
+                "finish_reason": finish_reason,
+                "task_id": task_id,
+                "tool_rounds": len(tool_actions),
+                "agent_mode": True,
+            },
+        }
 
     def plan_task(self, goal: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         task_id = str(uuid.uuid4())
@@ -209,20 +349,35 @@ class AIService:
             raise ValueError(f"Tool action '{action_key}' is not allowed.")
 
         trace_id = str(uuid.uuid4())
-        output = {
-            "task_id": task_id,
-            "tool_action": action_key,
-            "result": "accepted",
-            "payload_echo": payload,
-        }
+        try:
+            output_data = self.tool_executor.execute(tool, action, payload)
+            output = {
+                "task_id": task_id,
+                "tool_action": action_key,
+                "result": "completed",
+                **output_data,
+            }
+            status = "completed"
+            events = [f"Tool action completed: {action_key}"]
+        except Exception as exc:
+            logger.error("Tool action %s failed: %s", action_key, exc)
+            output = {
+                "task_id": task_id,
+                "tool_action": action_key,
+                "result": "failed",
+                "error": str(exc),
+            }
+            status = "failed"
+            events = [f"Tool action failed: {action_key}", str(exc)]
+
         self.execution_traces[trace_id] = {
             "task_id": task_id,
             "goal": "tool_execution",
             "summary": f"Executed tool action {action_key}",
-            "events": [f"Tool action accepted: {action_key}"],
+            "events": events,
             "output": output,
         }
-        return {"status": "completed", "output": output, "trace_id": trace_id}
+        return {"status": status, "output": output, "trace_id": trace_id}
 
     def get_trace(self, trace_id: str) -> Optional[Dict[str, Any]]:
         return self.execution_traces.get(trace_id)

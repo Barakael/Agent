@@ -24,6 +24,18 @@ class ChatResponseSchema(BaseModel):
     model: str = Field(..., description="Model used for response")
     tokens_used: Optional[Dict[str, int]] = Field(None, description="Token usage statistics")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+    tool_actions: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Tool actions executed during agent chat",
+    )
+
+
+class AgentChatRequestSchema(BaseModel):
+    """Schema for agent chat request with computer tools."""
+
+    messages: List[MessageSchema] = Field(..., description="Conversation history")
+    task_id: Optional[str] = Field(None, description="Optional task id for tracing")
+    max_tool_rounds: Optional[int] = Field(None, description="Maximum tool execution rounds")
 
 
 class HealthCheckSchema(BaseModel):

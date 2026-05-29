@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Conversation;
 use App\Models\Message;
+use App\Models\UserNotification;
 use App\Services\AIService;
 use Illuminate\Http\Request;
 
@@ -88,8 +89,27 @@ class MessageController extends Controller
                 'status' => 'completed',
                 'metadata' => [
                     'source' => 'openai',
+                    'status' => 'completed',
                 ],
             ]);
+
+            try {
+                UserNotification::create([
+                    'user_id' => $request->user()->id,
+                    'type' => 'chat',
+                    'title' => 'AI response received',
+                    'body' => 'A new assistant response is ready in your conversation.',
+                    'data' => [
+                        'conversation_id' => $conversation->id,
+                        'message_id' => $assistantMessage->id,
+                    ],
+                ]);
+            } catch (\Throwable $notificationError) {
+                \Log::warning('Failed to create chat notification', [
+                    'error' => $notificationError->getMessage(),
+                    'conversation_id' => $conversation->id,
+                ]);
+            }
 
             // Update conversation metadata
             $conversation->update([

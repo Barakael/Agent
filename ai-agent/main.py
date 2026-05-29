@@ -7,6 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from config import settings
 from models.schemas import (
+    AgentChatRequestSchema,
     ChatRequestSchema,
     ChatResponseSchema,
     HealthCheckSchema,
@@ -110,6 +111,36 @@ async def chat(request: ChatRequestSchema, auth: bool = Depends(validate_api_key
     except Exception as exc:
         logger.exception("Failed to process chat request")
         raise HTTPException(status_code=502, detail="AI API request failed")
+
+
+@app.post("/chat/agent", response_model=ChatResponseSchema)
+async def agent_chat(
+    request: AgentChatRequestSchema,
+    auth: bool = Depends(validate_api_key),
+    approval_token: str | None = Header(default=None, alias="X-Approval-Token"),
+):
+    validate_approval_token(approval_token)
+    ai_service: AIService = getattr(app.state, "ai_service", None)
+    if ai_service is None:
+        logger.error("AI service is not initialized")
+        raise HTTPException(status_code=503, detail="AI service not available")
+
+    payload = request.model_dump()
+    messages = payload.get("messages", [])
+
+    if ai_service.should_truncate_context(messages):
+        messages = ai_service.truncate_context(messages)
+
+    try:
+        result = ai_service.agent_chat(
+            messages=messages,
+            task_id=payload.get("task_id"),
+            max_tool_rounds=payload.get("max_tool_rounds"),
+        )
+        return ChatResponseSchema(**result)
+    except Exception:
+        logger.exception("Failed to process agent chat request")
+        raise HTTPException(status_code=502, detail="AI agent request failed")
 
 
 @app.post("/tasks/plan", response_model=TaskPlanResponseSchema)

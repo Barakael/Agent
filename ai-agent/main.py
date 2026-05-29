@@ -1,8 +1,9 @@
 import logging
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from config import settings
 from models.schemas import ChatRequestSchema, ChatResponseSchema, HealthCheckSchema
@@ -27,8 +28,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+security = HTTPBearer(auto_error=False)
+
+def validate_api_key(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> bool:
+    if (
+        credentials is None
+        or credentials.scheme.lower() != "bearer"
+        or credentials.credentials != settings.AI_SERVICE_API_KEY
+    ):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return True
+
 @app.on_event("startup")
 async def startup_event():
+    if not settings.AI_SERVICE_API_KEY:
+        logger.error("AI_SERVICE_API_KEY not configured")
+        raise ValueError("AI_SERVICE_API_KEY environment variable is required")
+
     try:
         app.state.ai_service = AIService()
         app.state.ai_service_ready = app.state.ai_service.health_check()
@@ -42,7 +60,7 @@ async def root():
     return {"message": "Agent AI Service is running"}
 
 @app.get("/health", response_model=HealthCheckSchema)
-async def health_check():
+async def health_check(auth: bool = Depends(validate_api_key)):
     return HealthCheckSchema(
         status="ok",
         version=settings.API_VERSION,
@@ -50,7 +68,7 @@ async def health_check():
     )
 
 @app.post("/chat", response_model=ChatResponseSchema)
-async def chat(request: ChatRequestSchema):
+async def chat(request: ChatRequestSchema, auth: bool = Depends(validate_api_key)):
     ai_service: AIService = getattr(app.state, "ai_service", None)
     if ai_service is None:
         logger.error("AI service is not initialized")

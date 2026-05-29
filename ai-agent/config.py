@@ -25,10 +25,11 @@ class Settings(BaseSettings):
     PORT: int = int(os.getenv("PORT", "8000"))
     TIMEOUT: int = int(os.getenv("TIMEOUT", "30"))
     MAX_CONTEXT_LENGTH: int = int(os.getenv("MAX_CONTEXT_LENGTH", "8000"))
+    AI_SERVICE_API_KEY: str = os.getenv("AI_SERVICE_API_KEY", "")
 
     class Config:
         env_file = ".env"
-        case_sensitive = True
+        case_sensitive = True 
 
 
 settings = Settings()

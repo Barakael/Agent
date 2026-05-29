@@ -300,7 +300,7 @@ export default function ChatPage() {
                         {message.metadata.tool_actions.map((action, index) => (
                           <span key={`${message.id}-tool-${index}`} className="wayda-tool-badge">
                             {action.tool}.{action.action}
-                            {['completed', 'playing', 'searched', 'navigated'].includes(String(action.output?.result)) ||
+                            {['completed', 'playing', 'searched', 'navigated', 'sent'].includes(String(action.output?.result)) ||
                             action.output?.message
                               ? ' ✓'
                               : ''}

@@ -11,6 +11,9 @@ from urllib.parse import urlparse
 import httpx
 
 from config import settings
+from services.cursor_agent import get_cursor_service
+from services.media_player import get_media_player
+from services.browser_automation import get_browser_automation, run_browser_task
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +31,9 @@ ALLOWED_TERMINAL_COMMANDS = {
     "uname",
     "wc",
     "sort",
+    "ps",
+    "pgrep",
+    "lsof",
 }
 
 
@@ -37,15 +43,25 @@ class ToolExecutor:
     def __init__(self) -> None:
         self.workspace = Path(settings.AGENT_WORKSPACE_DIR).resolve()
         self.workspace.mkdir(parents=True, exist_ok=True)
+        self.media_player = get_media_player()
+        self.cursor_service = get_cursor_service()
 
     def execute(self, tool: str, action: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         action_key = f"{tool}.{action}"
         handlers = {
             "browser.navigate": self._browser_navigate,
             "browser.read": self._browser_read,
+            "browser.type": self._browser_type,
+            "browser.click": self._browser_click,
+            "browser.search": self._browser_search,
             "file.read": self._file_read,
             "file.write": self._file_write,
             "terminal.exec": self._terminal_exec,
+            "system.inspect": self._system_inspect,
+            "media.play": self._media_play,
+            "media.search": self._media_search,
+            "cursor.prompt": self._cursor_prompt,
+            "cursor.resume": self._cursor_resume,
         }
         handler = handlers.get(action_key)
         if handler is None:
@@ -65,12 +81,35 @@ class ToolExecutor:
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError("Invalid URL for browser.navigate.")
 
-        opened = webbrowser.open(url, new=2)
+        if payload.get("system_browser", False):
+            opened = webbrowser.open(url, new=2)
+            return {
+                "result": "opened" if opened else "launch_attempted",
+                "url": url,
+                "message": f"Opened {url} in your default browser.",
+            }
+
+        automation = get_browser_automation()
+        result = run_browser_task(lambda: automation.navigate(url))
         return {
-            "result": "opened" if opened else "launch_attempted",
-            "url": url,
-            "message": f"Opened {url} in your default browser.",
+            "result": "navigated",
+            **result,
         }
+
+    def _browser_type(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        automation = get_browser_automation()
+        result = run_browser_task(lambda: automation.type_text(payload))
+        return {"result": "typed", **result}
+
+    def _browser_click(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        automation = get_browser_automation()
+        result = run_browser_task(lambda: automation.click(payload))
+        return {"result": "clicked", **result}
+
+    def _browser_search(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        automation = get_browser_automation()
+        result = run_browser_task(lambda: automation.search(payload))
+        return {"result": "searched", **result}
 
     def _browser_read(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         url = str(payload.get("url", "")).strip()
@@ -106,7 +145,8 @@ class ToolExecutor:
         }
 
     def _file_read(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        path = self._resolve_workspace_path(str(payload.get("path", "")))
+        scope = str(payload.get("scope", "workspace")).lower()
+        path = self._resolve_scoped_path(str(payload.get("path", "")), scope, write=False)
         if not path.exists():
             raise ValueError(f"File not found: {path.name}")
         if not path.is_file():
@@ -119,7 +159,8 @@ class ToolExecutor:
             content = content[:max_chars]
 
         return {
-            "path": str(path.relative_to(self.workspace)),
+            "scope": scope,
+            "path": str(path),
             "truncated": truncated,
             "content": content,
         }
@@ -156,7 +197,7 @@ class ToolExecutor:
 
         completed = subprocess.run(
             args,
-            cwd=self.workspace,
+            cwd=self._exec_cwd(payload),
             capture_output=True,
             text=True,
             timeout=int(payload.get("timeout", 15)),
@@ -173,10 +214,147 @@ class ToolExecutor:
 
         return {
             "command": command,
+            "cwd": str(self._exec_cwd(payload)),
             "exit_code": completed.returncode,
             "stdout": stdout,
             "stderr": stderr,
         }
+
+    def _cursor_prompt(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        result = self.cursor_service.prompt(payload)
+        return {"result": "sent", **result}
+
+    def _cursor_resume(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        result = self.cursor_service.resume(payload)
+        return {"result": "sent", **result}
+
+    def _media_play(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        result = self.media_player.play(payload)
+        return {"result": "playing", **result}
+
+    def _media_search(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        result = self.media_player.search(payload)
+        return {"result": "found", **result}
+
+    def _system_inspect(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        target = str(payload.get("target", "dev")).lower()
+        project_root = Path(settings.AGENT_PROJECT_ROOT).resolve()
+        lines_to_read = int(payload.get("lines", 40))
+
+        result: Dict[str, Any] = {
+            "target": target,
+            "project_root": str(project_root),
+            "project_exists": project_root.exists(),
+        }
+
+        if target in {"dev", "ports", "all"}:
+            result["ports"] = self._inspect_ports([5173, 8000, 8001, 3000])
+
+        if target in {"dev", "project", "all"} and project_root.exists():
+            result["project_entries"] = sorted(
+                item.name for item in project_root.iterdir() if not item.name.startswith(".")
+            )[:30]
+
+        if target in {"dev", "terminals", "cursor", "all"}:
+            result["cursor_terminals"] = self._inspect_cursor_terminals(lines_to_read)
+
+        if target in {"processes", "all"}:
+            result["processes"] = self._inspect_processes()
+
+        result["message"] = "Collected local dev environment status."
+        return result
+
+    def _inspect_ports(self, ports: List[int]) -> Dict[str, Any]:
+        port_status: Dict[str, Any] = {}
+        for port in ports:
+            completed = subprocess.run(
+                ["lsof", "-ti", f":{port}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            pids = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+            port_status[str(port)] = {
+                "in_use": bool(pids),
+                "pids": pids[:5],
+            }
+        return port_status
+
+    def _inspect_processes(self) -> Dict[str, Any]:
+        patterns = ("vite", "npm", "node", "php artisan", "python main.py", "uvicorn")
+        matches: Dict[str, List[str]] = {}
+        for pattern in patterns:
+            completed = subprocess.run(
+                ["pgrep", "-fl", pattern],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+            if lines:
+                matches[pattern] = lines[:5]
+        return matches
+
+    def _inspect_cursor_terminals(self, lines_to_read: int) -> List[Dict[str, Any]]:
+        terminals_dir = settings.CURSOR_TERMINALS_DIR.strip()
+        if not terminals_dir:
+            return [{"note": "CURSOR_TERMINALS_DIR is not configured."}]
+
+        base = Path(terminals_dir).resolve()
+        if not base.exists():
+            return [{"note": f"Cursor terminals folder not found: {base}"}]
+
+        snapshots: List[Dict[str, Any]] = []
+        for terminal_file in sorted(base.glob("*.txt"), key=lambda path: path.stat().st_mtime, reverse=True)[:6]:
+            raw = terminal_file.read_text(encoding="utf-8", errors="replace")
+            header, _, body = raw.partition("\n\n")
+            tail = "\n".join(body.splitlines()[-lines_to_read:])
+            meta: Dict[str, str] = {}
+            for line in header.splitlines():
+                if line.startswith("---") or not line.strip():
+                    continue
+                if ":" in line:
+                    key, value = line.split(":", 1)
+                    meta[key.strip()] = value.strip()
+
+            snapshots.append(
+                {
+                    "file": terminal_file.name,
+                    "meta": meta,
+                    "tail": tail.strip(),
+                }
+            )
+        return snapshots
+
+    def _exec_cwd(self, payload: Dict[str, Any]) -> Path:
+        scope = str(payload.get("scope", "workspace")).lower()
+        if scope == "project":
+            root = Path(settings.AGENT_PROJECT_ROOT).resolve()
+            if not root.exists():
+                raise ValueError("AGENT_PROJECT_ROOT does not exist.")
+            return root
+        return self.workspace
+
+    def _resolve_scoped_path(self, relative_path: str, scope: str, write: bool) -> Path:
+        if scope == "project":
+            root = Path(settings.AGENT_PROJECT_ROOT).resolve()
+            if not root.exists():
+                raise ValueError("AGENT_PROJECT_ROOT does not exist.")
+            if write:
+                raise ValueError("Project files are read-only. Use scope='workspace' to write files.")
+            cleaned = relative_path.strip()
+            if not cleaned:
+                raise ValueError("Path is required.")
+            resolved = Path(cleaned).expanduser()
+            if not resolved.is_absolute():
+                resolved = (root / cleaned).resolve()
+            else:
+                resolved = resolved.resolve()
+            if root not in resolved.parents and resolved != root:
+                raise ValueError("Path must stay inside AGENT_PROJECT_ROOT.")
+            return resolved
+
+        return self._resolve_workspace_path(relative_path)
 
     def _resolve_workspace_path(self, relative_path: str) -> Path:
         cleaned = relative_path.strip().lstrip("/")

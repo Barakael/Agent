@@ -19,6 +19,55 @@ class AIService
     }
 
     /**
+     * Send a chat request to the AI agent with computer tool access.
+     *
+     * @return array{response: string, model?: string, tokens_used?: array, tool_actions?: array, metadata?: array}
+     * @throws \Exception
+     */
+    public function agentChat(array $conversationHistory, array $options = []): array
+    {
+        try {
+            $payload = array_merge([
+                'messages' => $conversationHistory,
+            ], $options);
+
+            $headers = $this->getHeaders();
+            $approvalToken = config('services.ai.tool_approval_token', '');
+            if (!empty($approvalToken)) {
+                $headers['X-Approval-Token'] = $approvalToken;
+            }
+
+            $response = Http::withHeaders($headers)
+                ->timeout($this->timeout)
+                ->post("{$this->aiServiceUrl}/chat/agent", $payload);
+
+            if (!$response->successful()) {
+                Log::error('AI Agent Service Error', [
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                ]);
+
+                throw new \Exception("AI Agent Service returned status {$response->status()}");
+            }
+
+            $data = $response->json();
+
+            if (!isset($data['response'])) {
+                throw new \Exception('Invalid AI Agent Service response format');
+            }
+
+            return $data;
+        } catch (\Exception $e) {
+            Log::error('AI Agent Service Exception', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            throw $e;
+        }
+    }
+
+    /**
      * Send a chat request to the AI service.
      *
      * @param array $conversationHistory Array of messages with 'role' and 'content' keys
@@ -35,7 +84,7 @@ class AIService
 
             $response = Http::withHeaders($this->getHeaders())
                 ->timeout($this->timeout)
-                ->post("{$this->aiServiceUrl}/api/chat", $payload);
+                ->post("{$this->aiServiceUrl}/chat", $payload);
 
             if (!$response->successful()) {
                 Log::error('AI Service Error', [
@@ -86,7 +135,8 @@ class AIService
     public function healthCheck(): bool
     {
         try {
-            $response = Http::timeout(5)
+            $response = Http::withHeaders($this->getHeaders())
+                ->timeout(5)
                 ->get("{$this->aiServiceUrl}/health");
 
             return $response->successful();

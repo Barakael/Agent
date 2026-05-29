@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { Archive, Edit3, Mic, Plus, Search, Trash2, Volume2 } from 'lucide-react'
 import AppShell from '../components/layout/AppShell'
 import {
@@ -25,7 +25,14 @@ export default function ChatPage() {
   const [sending, setSending] = useState(false)
   const [assistantTyping, setAssistantTyping] = useState(false)
   const [voiceListening, setVoiceListening] = useState(false)
+  const [voiceHint, setVoiceHint] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const recognitionRef = useRef<SpeechRecognition | null>(null)
+
+  const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
+    messagesEndRef.current?.scrollIntoView({ behavior, block: 'end' })
+  }
 
   const loadConversations = async () => {
     setLoading(true)
@@ -68,6 +75,22 @@ export default function ChatPage() {
       setAssistantTyping(false)
     }
   }, [lastMessage, selectedConversation])
+
+  useEffect(() => {
+    const behavior: ScrollBehavior =
+      messages.length > 0 && messagesEndRef.current ? 'smooth' : 'instant'
+    scrollToBottom(behavior)
+  }, [messages, assistantTyping])
+
+  useEffect(() => {
+    scrollToBottom('instant')
+  }, [selectedConversation?.id])
+
+  useEffect(() => {
+    return () => {
+      recognitionRef.current?.stop()
+    }
+  }, [])
 
   const filteredConversations = useMemo(
     () =>
@@ -146,24 +169,62 @@ export default function ChatPage() {
     }
   }
 
-  const startVoiceInput = () => {
-    const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SpeechRecognitionCtor) {
-      setError('Speech recognition is not supported in this browser.')
+  const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || event.shiftKey) {
       return
     }
+    event.preventDefault()
+    if (sending || !selectedConversation || !newMessage.trim()) {
+      return
+    }
+    event.currentTarget.form?.requestSubmit()
+  }
+
+  const toggleVoiceInput = () => {
+    if (voiceListening && recognitionRef.current) {
+      recognitionRef.current.stop()
+      setVoiceListening(false)
+      setVoiceHint(null)
+      return
+    }
+
+    const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SpeechRecognitionCtor) {
+      setError('Voice input requires Chrome or Edge. Safari/Firefox are not supported.')
+      return
+    }
+
     const recognition = new SpeechRecognitionCtor()
+    recognitionRef.current = recognition
     recognition.lang = 'en-US'
     recognition.continuous = false
-    recognition.interimResults = false
+    recognition.interimResults = true
     recognition.onresult = (event) => {
-      const transcript = event.results[0]?.[0]?.transcript
-      if (transcript) {
-        setNewMessage((current) => `${current} ${transcript}`.trim())
+      let transcript = ''
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        transcript += event.results[index][0]?.transcript ?? ''
+      }
+      setNewMessage(transcript.trim())
+      if (event.results[event.results.length - 1]?.isFinal) {
+        setVoiceHint('Voice captured. Press Enter or Send to submit.')
       }
     }
-    recognition.onerror = () => setError('Voice input failed. Please try again.')
-    recognition.onend = () => setVoiceListening(false)
+    recognition.onerror = (event) => {
+      if (event.error === 'not-allowed') {
+        setError('Microphone blocked. Allow mic access for this site in your browser settings.')
+      } else if (event.error === 'no-speech') {
+        setVoiceHint('No speech detected. Try again.')
+      } else {
+        setError(`Voice input failed: ${event.error}`)
+      }
+      setVoiceListening(false)
+    }
+    recognition.onend = () => {
+      setVoiceListening(false)
+      recognitionRef.current = null
+    }
+    setError(null)
+    setVoiceHint('Listening… speak now')
     setVoiceListening(true)
     recognition.start()
   }
@@ -239,7 +300,10 @@ export default function ChatPage() {
                         {message.metadata.tool_actions.map((action, index) => (
                           <span key={`${message.id}-tool-${index}`} className="wayda-tool-badge">
                             {action.tool}.{action.action}
-                            {action.output?.result === 'completed' || action.output?.message ? ' ✓' : ''}
+                            {['completed', 'playing', 'searched', 'navigated'].includes(String(action.output?.result)) ||
+                            action.output?.message
+                              ? ' ✓'
+                              : ''}
                           </span>
                         ))}
                       </div>
@@ -259,20 +323,29 @@ export default function ChatPage() {
                 </div>
               </article>
             ) : null}
+            <div ref={messagesEndRef} aria-hidden="true" />
           </div>
 
           <div className="wayda-composer-wrap">
             {error ? <p className="wayda-error">{error}</p> : null}
+            {voiceListening ? <p className="wayda-voice-status">Listening… speak now (click mic to stop)</p> : null}
+            {!voiceListening && voiceHint ? <p className="wayda-voice-status">{voiceHint}</p> : null}
             <form onSubmit={handleSendMessage} className="wayda-composer">
               <textarea
                 value={newMessage}
                 onChange={(event) => setNewMessage(event.target.value)}
+                onKeyDown={handleComposerKeyDown}
                 placeholder={selectedConversation ? 'Message Wayda...' : 'Create or select a conversation...'}
                 disabled={sending || !selectedConversation}
               />
               <div className="wayda-composer-actions">
-                <button type="button" className="wayda-icon-button" onClick={startVoiceInput} title="Voice input">
-                  <Mic size={15} className={voiceListening ? 'text-emerald-500' : ''} />
+                <button
+                  type="button"
+                  className={`wayda-icon-button ${voiceListening ? 'wayda-icon-button-active' : ''}`}
+                  onClick={toggleVoiceInput}
+                  title={voiceListening ? 'Stop voice input' : 'Voice input (Chrome/Edge)'}
+                >
+                  <Mic size={15} className={voiceListening ? 'text-emerald-400' : ''} />
                 </button>
                 <button type="button" className="wayda-icon-button" onClick={readLastAssistantMessage} title="Read response">
                   <Volume2 size={15} />

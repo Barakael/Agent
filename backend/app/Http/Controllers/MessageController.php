@@ -77,9 +77,12 @@ class MessageController extends Controller
             ])
             ->toArray();
 
-        // Get AI response
+        // Get AI response (agent mode with computer tools)
         try {
-            $aiResponse = $this->aiService->chat($conversationHistory);
+            $agentResult = $this->aiService->agentChat($conversationHistory, [
+                'task_id' => (string) $conversation->id,
+            ]);
+            $aiResponse = $agentResult['response'];
 
             // Store assistant message
             $assistantMessage = $conversation->messages()->create([
@@ -90,6 +93,11 @@ class MessageController extends Controller
                 'metadata' => [
                     'source' => 'openai',
                     'status' => 'completed',
+                    'agent_mode' => true,
+                    'model' => $agentResult['model'] ?? null,
+                    'tool_actions' => $agentResult['tool_actions'] ?? [],
+                    'tokens_used' => $agentResult['tokens_used'] ?? null,
+                    'agent_metadata' => $agentResult['metadata'] ?? null,
                 ],
             ]);
 

@@ -69,11 +69,20 @@ class LogActivity
 
     protected function normalizeBody(array $body): array
     {
-        if (count($body) > 25) {
-            return array_slice($body, 0, 25);
-        }
+        $sensitiveKeys = ['password', 'password_confirmation', 'current_password', 'token', 'api_key', 'authorization'];
 
-        return $body;
+        $normalized = collect($body)
+            ->take(25)
+            ->map(function ($value, $key) use ($sensitiveKeys) {
+                if (in_array(strtolower((string) $key), $sensitiveKeys, true)) {
+                    return '[REDACTED]';
+                }
+
+                return is_array($value) ? '[ARRAY]' : $value;
+            })
+            ->toArray();
+
+        return $normalized;
     }
 
     protected function resolveEntityType(Request $request): ?string

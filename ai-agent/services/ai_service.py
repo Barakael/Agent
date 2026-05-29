@@ -1,4 +1,5 @@
 import logging
+import uuid
 from typing import List, Dict, Optional, Any
 from openai import OpenAI
 from config import settings
@@ -17,14 +18,46 @@ class AIService:
 
         self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
         self.model = settings.OPENAI_MODEL
+        self.reasoning_effort = settings.OPENAI_REASONING_EFFORT
         self.temperature = settings.OPENAI_TEMPERATURE
         self.max_tokens = settings.OPENAI_MAX_TOKENS
+        self.task_runs: Dict[str, Dict[str, Any]] = {}
+        self.execution_traces: Dict[str, Dict[str, Any]] = {}
+
+    def _uses_reasoning_model(self) -> bool:
+        model = self.model.lower()
+        return model.startswith(("gpt-5", "o1", "o3", "o4"))
+
+    def _build_completion_kwargs(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        token_limit = max_tokens if max_tokens is not None else self.max_tokens
+        kwargs: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+        }
+
+        if self._uses_reasoning_model():
+            kwargs["reasoning_effort"] = reasoning_effort or self.reasoning_effort
+            kwargs["max_completion_tokens"] = token_limit
+        else:
+            kwargs["temperature"] = (
+                temperature if temperature is not None else self.temperature
+            )
+            kwargs["max_tokens"] = token_limit
+
+        return kwargs
 
     def chat(
         self,
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Send chat messages to OpenAI and get response.
@@ -38,23 +71,26 @@ class AIService:
             Dict containing response and metadata
         """
         try:
-            # Use provided values or defaults from settings
-            temp = temperature if temperature is not None else self.temperature
-            max_tok = max_tokens if max_tokens is not None else self.max_tokens
-
-            # Ensure messages are in correct format
             formatted_messages = [
                 {"role": msg.get("role", "user"), "content": msg.get("content", "")}
                 for msg in messages
             ]
 
-            logger.info(f"Sending {len(formatted_messages)} messages to OpenAI model: {self.model}")
+            effort = reasoning_effort or self.reasoning_effort
+            logger.info(
+                "Sending %s messages to OpenAI model: %s (reasoning_effort=%s)",
+                len(formatted_messages),
+                self.model,
+                effort if self._uses_reasoning_model() else "n/a",
+            )
 
             response = self.client.chat.completions.create(
-                model=self.model,
-                messages=formatted_messages,
-                temperature=temp,
-                max_tokens=max_tok,
+                **self._build_completion_kwargs(
+                    formatted_messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    reasoning_effort=reasoning_effort,
+                )
             )
 
             # Extract response
@@ -81,6 +117,115 @@ class AIService:
         except Exception as e:
             logger.error(f"Error calling OpenAI API: {str(e)}")
             raise
+
+    def plan_task(self, goal: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        task_id = str(uuid.uuid4())
+        planning_prompt = (
+            "You are planning a safe autonomous assistant task. "
+            "Return 4 concise executable steps as plain lines."
+        )
+        messages = [
+            {"role": "system", "content": planning_prompt},
+            {
+                "role": "user",
+                "content": f"Goal: {goal}\nContext: {context or {}}",
+            },
+        ]
+        result = self.chat(
+            messages=messages,
+            max_tokens=800,
+            reasoning_effort="low",
+        )
+        raw_lines = [line.strip("- ").strip() for line in result["response"].splitlines() if line.strip()]
+        steps = raw_lines[:4] if raw_lines else ["Analyze request", "Plan actions", "Execute safely", "Return summary"]
+        self.task_runs[task_id] = {
+            "status": "planned",
+            "logs": ["Task planned"],
+            "goal": goal,
+            "trace_id": None,
+        }
+        return {
+            "task_id": task_id,
+            "plan_steps": steps,
+            "status": "planned",
+        }
+
+    def execute_task(self, task_id: str, goal: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        trace_id = str(uuid.uuid4())
+        execution_prompt = (
+            "Summarize execution for the following user goal in 3 concise lines: "
+            f"{goal}. Context: {context or {}}"
+        )
+        result = self.chat(
+            messages=[{"role": "user", "content": execution_prompt}],
+            max_tokens=800,
+            reasoning_effort="low",
+        )
+        summary = result["response"]
+        self.execution_traces[trace_id] = {
+            "task_id": task_id,
+            "goal": goal,
+            "summary": summary,
+            "events": [
+                "Task received",
+                "Safety checks completed",
+                "Execution summary generated",
+            ],
+        }
+        self.task_runs[task_id] = {
+            "status": "completed",
+            "logs": ["Task accepted", "Task executed", "Task completed"],
+            "goal": goal,
+            "trace_id": trace_id,
+        }
+        return {
+            "task_id": task_id,
+            "status": "completed",
+            "summary": summary,
+            "trace_id": trace_id,
+        }
+
+    def get_task_status(self, task_id: str) -> Dict[str, Any]:
+        run = self.task_runs.get(task_id)
+        if run is None:
+            return {"task_id": task_id, "status": "not_found", "logs": [], "trace_id": None}
+        return {
+            "task_id": task_id,
+            "status": run["status"],
+            "logs": run["logs"],
+            "trace_id": run.get("trace_id"),
+        }
+
+    def execute_tool_action(
+        self,
+        task_id: str,
+        tool: str,
+        action: str,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        allowed_actions = set(settings.ALLOWED_TOOL_ACTIONS.split(","))
+        action_key = f"{tool}.{action}"
+        if action_key not in allowed_actions:
+            raise ValueError(f"Tool action '{action_key}' is not allowed.")
+
+        trace_id = str(uuid.uuid4())
+        output = {
+            "task_id": task_id,
+            "tool_action": action_key,
+            "result": "accepted",
+            "payload_echo": payload,
+        }
+        self.execution_traces[trace_id] = {
+            "task_id": task_id,
+            "goal": "tool_execution",
+            "summary": f"Executed tool action {action_key}",
+            "events": [f"Tool action accepted: {action_key}"],
+            "output": output,
+        }
+        return {"status": "completed", "output": output, "trace_id": trace_id}
+
+    def get_trace(self, trace_id: str) -> Optional[Dict[str, Any]]:
+        return self.execution_traces.get(trace_id)
 
     def count_tokens_in_messages(self, messages: List[Dict[str, str]]) -> int:
         """

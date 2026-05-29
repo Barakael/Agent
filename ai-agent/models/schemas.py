@@ -32,3 +32,47 @@ class HealthCheckSchema(BaseModel):
     status: str = Field(..., description="Service status")
     version: str = Field(..., description="API version")
     ai_service_ready: bool = Field(..., description="Whether AI service is ready")
+
+
+class TaskPlanRequestSchema(BaseModel):
+    goal: str = Field(..., description="Task goal")
+    context: Optional[Dict[str, Any]] = Field(default=None, description="Optional planning context")
+
+
+class TaskPlanResponseSchema(BaseModel):
+    task_id: str = Field(..., description="Generated task id")
+    plan_steps: List[str] = Field(..., description="Generated execution steps")
+    status: str = Field(..., description="Planning status")
+
+
+class TaskExecuteRequestSchema(BaseModel):
+    task_id: str = Field(..., description="Task id from planning endpoint")
+    goal: str = Field(..., description="Task goal")
+    context: Optional[Dict[str, Any]] = Field(default=None, description="Execution context")
+
+
+class TaskExecuteResponseSchema(BaseModel):
+    task_id: str = Field(..., description="Task id")
+    status: str = Field(..., description="Execution state")
+    summary: str = Field(..., description="Result summary")
+    trace_id: str = Field(..., description="Execution trace id")
+
+
+class TaskStatusResponseSchema(BaseModel):
+    task_id: str = Field(..., description="Task id")
+    status: str = Field(..., description="Current execution state")
+    trace_id: Optional[str] = Field(default=None, description="Trace id for execution")
+    logs: List[str] = Field(default_factory=list, description="Task logs")
+
+
+class ToolExecutionRequestSchema(BaseModel):
+    task_id: str = Field(..., description="Associated task id")
+    tool: str = Field(..., description="Tool namespace")
+    action: str = Field(..., description="Action name")
+    payload: Dict[str, Any] = Field(default_factory=dict, description="Tool payload")
+
+
+class ToolExecutionResponseSchema(BaseModel):
+    status: str = Field(..., description="Execution status")
+    output: Dict[str, Any] = Field(default_factory=dict, description="Execution output")
+    trace_id: str = Field(..., description="Trace id")

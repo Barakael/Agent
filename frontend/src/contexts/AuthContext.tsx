@@ -1,11 +1,17 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import api from '../services/api'
-import { login as loginRequest, register as registerRequest } from '../services/authService'
+import {
+  login as loginRequest,
+  register as registerRequest,
+  logout as logoutRequest,
+  updateProfile as updateProfileRequest,
+} from '../services/authService'
 
 interface User {
   id: number
   name: string
   email: string
+  role: string
 }
 
 interface AuthContextValue {
@@ -14,7 +20,8 @@ interface AuthContextValue {
   loading: boolean
   login: (email: string, password: string) => Promise<void>
   register: (name: string, email: string, password: string, passwordConfirmation: string) => Promise<void>
-  logout: () => void
+  logout: () => Promise<void>
+  updateProfile: (payload: { name?: string; email?: string }) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
@@ -59,7 +66,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(userData)
   }
 
-  const logout = () => {
+  const logout = async () => {
+    if (token) {
+      try {
+        await logoutRequest()
+      } catch {
+        // Continue with local logout regardless of server state.
+      }
+    }
     localStorage.removeItem('agent_auth_token')
     localStorage.removeItem('agent_user')
     delete api.defaults.headers.common.Authorization
@@ -67,8 +81,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null)
   }
 
+  const updateProfile = async (payload: { name?: string; email?: string }) => {
+    const updatedUser = await updateProfileRequest(payload)
+    localStorage.setItem('agent_user', JSON.stringify(updatedUser))
+    setUser(updatedUser)
+  }
+
   const value = useMemo(
-    () => ({ user, token, loading, login, register, logout }),
+    () => ({ user, token, loading, login, register, logout, updateProfile }),
     [user, token, loading],
   )
 

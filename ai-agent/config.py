@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     MAX_CONTEXT_LENGTH: int = int(os.getenv("MAX_CONTEXT_LENGTH", "8000"))
     AI_SERVICE_API_KEY: str = os.getenv("AI_SERVICE_API_KEY", "")
     TOOL_APPROVAL_TOKEN: str = os.getenv("TOOL_APPROVAL_TOKEN", "")
+    AGENT_WORKSPACE_DIR: str = os.getenv("AGENT_WORKSPACE_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), "workspace"))
+    AGENT_MAX_TOOL_ROUNDS: int = int(os.getenv("AGENT_MAX_TOOL_ROUNDS", "6"))
     ALLOWED_TOOL_ACTIONS: str = os.getenv(
         "ALLOWED_TOOL_ACTIONS",
         "browser.navigate,browser.read,file.read,file.write,terminal.exec",

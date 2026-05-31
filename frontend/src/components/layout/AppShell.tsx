@@ -3,7 +3,7 @@ import {
   Bot,
   ClipboardList,
   Cog,
-  Gauge,
+  // Gauge,
   History,
   KeyRound,
   LogOut,
@@ -23,7 +23,7 @@ import { useTheme } from '../../contexts/ThemeContext'
 import { useRealtime } from '../../contexts/RealtimeContext'
 
 const navigation = [
-  { to: '/', label: 'Dashboard', icon: Gauge },
+  // { to: '/', label: 'Dashboard', icon: Gauge },
   { to: '/chat', label: 'Chat', icon: MessageSquare },
   { to: '/tasks', label: 'Tasks', icon: ClipboardList },
   { to: '/activity', label: 'Activity Logs', icon: History },

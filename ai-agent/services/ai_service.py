@@ -343,7 +343,7 @@ class AIService:
         action: str,
         payload: Dict[str, Any],
     ) -> Dict[str, Any]:
-        allowed_actions = set(settings.ALLOWED_TOOL_ACTIONS.split(","))
+        allowed_actions = self._allowed_tool_actions()
         action_key = f"{tool}.{action}"
         if action_key not in allowed_actions:
             raise ValueError(f"Tool action '{action_key}' is not allowed.")
@@ -378,6 +378,13 @@ class AIService:
             "output": output,
         }
         return {"status": status, "output": output, "trace_id": trace_id}
+
+    @staticmethod
+    def _allowed_tool_actions() -> set[str]:
+        import os
+
+        raw = os.getenv("ALLOWED_TOOL_ACTIONS", settings.ALLOWED_TOOL_ACTIONS)
+        return {part.strip() for part in raw.split(",") if part.strip()}
 
     def get_trace(self, trace_id: str) -> Optional[Dict[str, Any]]:
         return self.execution_traces.get(trace_id)

@@ -5,7 +5,7 @@ AGENT_TOOLS = [
             "name": "execute_tool",
             "description": (
                 "Run actions on the user's machine: browser automation, local media/VLC, "
-                "Cursor IDE agent prompts, dev inspection, and project terminal commands."
+                "local Cursor IDE prompts (no API key), dev inspection, and terminal commands."
             ),
             "parameters": {
                 "type": "object",
@@ -35,11 +35,9 @@ AGENT_TOOLS = [
                     "payload": {
                         "type": "object",
                         "description": (
-                            "cursor.prompt: {prompt} sends a task to Cursor IDE on the project. "
-                            "cursor.resume: {prompt, agent_id?} continues the last Cursor agent. "
-                            "media.play: {query} or {path, app?: VLC}. "
-                            "browser.search: {engine, query, play_first?}. "
-                            "system.inspect: {target?: dev|all}."
+                            "cursor.prompt: {prompt} opens Cursor locally and pastes into agent chat. "
+                            "cursor.resume: {prompt} pastes a follow-up into Cursor. "
+                            "media.play: {query} or {path}. browser.search: {engine, query, play_first?}."
                         ),
                     },
                 },
@@ -51,20 +49,19 @@ AGENT_TOOLS = [
 
 AGENT_SYSTEM_PROMPT = """You are Wayda, a capable AI assistant with access to the user's computer through controlled tools.
 
-Cursor IDE:
-- When the user asks you to prompt Cursor, tell Cursor to do something, or code/fix/build via Cursor, use cursor.prompt with the exact task in {prompt}.
-- Examples: "fix the chat autoscroll bug", "add dark mode to settings", "run tests and fix failures".
-- cursor.prompt launches a real Cursor agent on the Wayda project. Tell the user to watch Cursor for live edits.
-- Use cursor.resume for follow-ups in the same Cursor agent thread.
-- Do NOT say you cannot access Cursor if cursor.prompt is available.
+Cursor IDE (local — no API key needed):
+- When the user asks to prompt Cursor or code/fix/build via Cursor, use cursor.prompt with {prompt}.
+- This opens the Cursor app on their machine, pastes the prompt into agent chat, and submits it.
+- Use cursor.resume for follow-up prompts in the same Cursor session.
+- Do NOT ask for CURSOR_API_KEY or tell the user to paste manually unless local control fails.
 
 Local media:
-- Use media.play for videos in Documents/Movies/Downloads (e.g. "play legacies episode 12 in VLC").
+- Use media.play for videos in Documents/Movies/Downloads.
 
 Browser:
-- Use browser.search for YouTube/Google. Use play_first=true for YouTube playback.
+- Use browser.search for YouTube/Google with play_first=true when appropriate.
 
 Dev / builds:
 - Use system.inspect with target="dev" for build status and Cursor terminal logs.
 
-After cursor.prompt, summarize what you asked Cursor to do and paste the result summary if available."""
+After cursor.prompt, tell the user to check the Cursor window for the running agent."""

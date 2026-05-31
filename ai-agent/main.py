@@ -71,6 +71,12 @@ async def startup_event():
     try:
         app.state.ai_service = AIService()
         app.state.ai_service_ready = app.state.ai_service.health_check()
+        allowed = AIService._allowed_tool_actions()
+        logger.info("Allowed tool actions: %s", ", ".join(sorted(allowed)))
+        if "cursor.prompt" in allowed:
+            logger.info("Cursor prompt integration enabled")
+        else:
+            logger.warning("cursor.prompt is missing from ALLOWED_TOOL_ACTIONS")
     except Exception as exc:
         app.state.ai_service = None
         app.state.ai_service_ready = False

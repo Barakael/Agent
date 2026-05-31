@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     CURSOR_API_KEY: str = os.getenv("CURSOR_API_KEY", "")
     CURSOR_MODEL: str = os.getenv("CURSOR_MODEL", "composer-2.5")
     CURSOR_PROJECT_CWD: str = os.getenv("CURSOR_PROJECT_CWD", os.getenv("AGENT_PROJECT_ROOT", os.path.dirname(os.path.dirname(__file__))))
+    CURSOR_INTEGRATION_MODE: str = os.getenv("CURSOR_INTEGRATION_MODE", "local")
+    CURSOR_LOCAL_SHORTCUT: str = os.getenv("CURSOR_LOCAL_SHORTCUT", '"i" using {command down, shift down}')
     CURSOR_PROMPT_TIMEOUT: int = int(os.getenv("CURSOR_PROMPT_TIMEOUT", "600"))
     ALLOWED_MEDIA_DIRS: str = os.getenv(
         "ALLOWED_MEDIA_DIRS",

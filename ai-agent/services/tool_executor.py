@@ -14,6 +14,8 @@ from config import settings
 from services.cursor_agent import get_cursor_service
 from services.media_player import get_media_player
 from services.browser_automation import get_browser_automation, run_browser_task
+from services.runner_client import RunnerClient
+from services.trading_client import TradingClient
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +47,20 @@ class ToolExecutor:
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.media_player = get_media_player()
         self.cursor_service = get_cursor_service()
+        self.runner = RunnerClient()
+        self.trading = TradingClient()
 
     def execute(self, tool: str, action: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         action_key = f"{tool}.{action}"
+
+        if tool == "trading":
+            return self._trading_action(action, payload)
+
+        if settings.RUNNER_ENABLED and self.runner.is_local_tool(tool):
+            logger.info("Delegating %s to local runner", action_key)
+            result = self.runner.execute(tool, action, payload, task_id=payload.get("task_id"))
+            return {"result": "completed", **result}
+
         handlers = {
             "browser.navigate": self._browser_navigate,
             "browser.read": self._browser_read,
@@ -69,6 +82,21 @@ class ToolExecutor:
 
         logger.info("Executing tool action %s with payload keys %s", action_key, list(payload.keys()))
         return handler(payload)
+
+    def _trading_action(self, action: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if action == "status":
+            return {"result": "ok", **self.trading.status()}
+        if action == "pause":
+            return {"result": "paused", **self.trading.pause()}
+        if action == "resume":
+            return {"result": "resumed", **self.trading.resume()}
+        if action == "metrics":
+            return {"result": "ok", **self.trading.metrics()}
+        if action == "close_all":
+            return {"result": "closed", **self.trading.close_all()}
+        if action == "positions":
+            return {"result": "ok", **self.trading.positions()}
+        raise ValueError(f"Unsupported trading action '{action}'.")
 
     def _browser_navigate(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         url = str(payload.get("url", "")).strip()

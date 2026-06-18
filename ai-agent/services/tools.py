@@ -4,15 +4,15 @@ AGENT_TOOLS = [
         "function": {
             "name": "execute_tool",
             "description": (
-                "Run actions on the user's machine: browser automation, local media/VLC, "
-                "local Cursor IDE prompts (no API key), dev inspection, and terminal commands."
+                "Run actions on the user's machine, supervise trading, or control the trading bot. "
+                "Trading tools are read/supervise only — use trading.pause, trading.resume, trading.status."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "tool": {
                         "type": "string",
-                        "enum": ["browser", "file", "terminal", "system", "media", "cursor"],
+                        "enum": ["browser", "file", "terminal", "system", "media", "cursor", "trading"],
                         "description": "Tool namespace.",
                     },
                     "action": {
@@ -29,6 +29,12 @@ AGENT_TOOLS = [
                             "play",
                             "prompt",
                             "resume",
+                            "status",
+                            "pause",
+                            "resume",
+                            "metrics",
+                            "positions",
+                            "close_all",
                         ],
                         "description": "Action to perform.",
                     },
@@ -63,5 +69,12 @@ Browser:
 
 Dev / builds:
 - Use system.inspect with target="dev" for build status and Cursor terminal logs.
+
+Trading supervision (read/control bot — cannot autonomously open trades):
+- trading.status — bot state, daily P&L, session info
+- trading.pause / trading.resume — halt or resume autonomous trading
+- trading.metrics — win rate, drawdown, Sharpe
+- trading.positions — open positions
+- trading.close_all — emergency close all positions (use only when user asks)
 
 After cursor.prompt, tell the user to check the Cursor window for the running agent."""

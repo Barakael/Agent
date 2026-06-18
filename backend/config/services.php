@@ -42,6 +42,12 @@ return [
         'timeout' => env('AI_SERVICE_TIMEOUT', 30),
     ],
 
+    'trading' => [
+        'url' => env('TRADING_SERVICE_URL', 'http://localhost:8002'),
+        'api_key' => env('TRADING_SERVICE_API_KEY', ''),
+        'timeout' => env('TRADING_SERVICE_TIMEOUT', 30),
+    ],
+
     'realtime' => [
         'transport' => env('REALTIME_TRANSPORT', 'websocket'),
     ],

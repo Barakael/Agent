@@ -8,6 +8,7 @@ import RegisterPage from './pages/Auth/Register'
 import DashboardPage from './pages/Dashboard'
 import ChatPage from './pages/Chat'
 import TasksPage from './pages/Tasks'
+import TradingPage from './pages/Trading'
 import ActivityLogsPage from './pages/ActivityLogs'
 import MemoryPage from './pages/Memory'
 import PermissionsPage from './pages/Permissions'
@@ -43,6 +44,7 @@ function App() {
               <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
               <Route path="/chat" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
               <Route path="/tasks" element={<ProtectedRoute><TasksPage /></ProtectedRoute>} />
+              <Route path="/trading" element={<ProtectedRoute><TradingPage /></ProtectedRoute>} />
               <Route path="/activity" element={<ProtectedRoute><ActivityLogsPage /></ProtectedRoute>} />
               <Route path="/memory" element={<ProtectedRoute><MemoryPage /></ProtectedRoute>} />
               <Route path="/permissions" element={<ProtectedRoute><PermissionsPage /></ProtectedRoute>} />

@@ -12,6 +12,7 @@ import {
   Moon,
   Shield,
   Sun,
+  TrendingUp,
   UserCircle2,
   X,
 } from 'lucide-react'
@@ -26,6 +27,7 @@ const navigation = [
   // { to: '/', label: 'Dashboard', icon: Gauge },
   { to: '/chat', label: 'Chat', icon: MessageSquare },
   { to: '/tasks', label: 'Tasks', icon: ClipboardList },
+  { to: '/trading', label: 'Trading', icon: TrendingUp },
   { to: '/activity', label: 'Activity Logs', icon: History },
   { to: '/memory', label: 'Memory', icon: Bot },
   { to: '/permissions', label: 'Permissions', icon: Shield },

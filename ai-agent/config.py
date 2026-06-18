@@ -52,8 +52,18 @@ class Settings(BaseSettings):
         "ALLOWED_TOOL_ACTIONS",
         "browser.navigate,browser.read,browser.type,browser.click,browser.search,"
         "file.read,file.write,terminal.exec,system.inspect,media.play,media.search,"
-        "cursor.prompt,cursor.resume",
+        "cursor.prompt,cursor.resume,"
+        "trading.status,trading.pause,trading.resume,trading.metrics,trading.close_all",
     )
+
+    # Local runner (VPS → desktop delegation)
+    RUNNER_ENABLED: bool = os.getenv("RUNNER_ENABLED", "false").lower() == "true"
+    RUNNER_URL: str = os.getenv("RUNNER_URL", "http://127.0.0.1:8010")
+    RUNNER_API_KEY: str = os.getenv("RUNNER_API_KEY", "local-runner-dev-key")
+
+    # Trading engine supervision
+    TRADING_ENGINE_URL: str = os.getenv("TRADING_ENGINE_URL", "http://localhost:8002")
+    TRADING_SERVICE_API_KEY: str = os.getenv("TRADING_SERVICE_API_KEY", "")
 
     class Config:
         env_file = ".env"

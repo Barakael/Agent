@@ -1,0 +1,15 @@
+[Unit]
+Description=Wayda Trading Engine
+After=network.target
+
+[Service]
+Type=simple
+User=wayda
+WorkingDirectory=/opt/wayda/trading-engine
+EnvironmentFile=/opt/wayda/trading-engine/.env
+ExecStart=/opt/wayda/trading-engine/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8002
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

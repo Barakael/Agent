@@ -8,7 +8,7 @@ use App\Http\Controllers\MemoryController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\PermissionController;
 use App\Http\Controllers\SystemController;
-use App\Http\Controllers\TaskController;
+use App\Http\Controllers\TradingController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -83,6 +83,23 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // System status
     Route::get('/system/health', [SystemController::class, 'health']);
+
+    // Trading endpoints (proxied to trading-engine)
+    Route::prefix('trading')->group(function () {
+        Route::get('/status', [TradingController::class, 'status']);
+        Route::get('/positions', [TradingController::class, 'positions']);
+        Route::get('/journal', [TradingController::class, 'journal']);
+        Route::get('/metrics', [TradingController::class, 'metrics']);
+        Route::post('/pause', [TradingController::class, 'pause']);
+        Route::post('/resume', [TradingController::class, 'resume']);
+        Route::post('/kill', [TradingController::class, 'kill'])->middleware('role:admin');
+        Route::post('/start', [TradingController::class, 'start']);
+        Route::post('/stop', [TradingController::class, 'stop']);
+        Route::post('/orders', [TradingController::class, 'placeOrder']);
+        Route::post('/positions/close-all', [TradingController::class, 'closeAll']);
+        Route::post('/positions/{contractId}/close', [TradingController::class, 'closePosition']);
+        Route::post('/backtest', [TradingController::class, 'backtest'])->middleware('role:admin');
+    });
 
     // User endpoint
     Route::get('/user', function (Request $request) {

@@ -6,11 +6,12 @@ use App\Models\AiTask;
 use App\Models\ApprovalRequest;
 use App\Models\UserNotification;
 use App\Services\AIService;
+use App\Services\TradingService;
 use Illuminate\Http\Request;
 
 class SystemController extends Controller
 {
-    public function health(Request $request, AIService $aiService)
+    public function health(Request $request, AIService $aiService, TradingService $tradingService)
     {
         $user = $request->user();
         $userTaskQuery = AiTask::query()->where('user_id', $user->id);
@@ -24,6 +25,9 @@ class SystemController extends Controller
                     ],
                     'ai_service' => [
                         'status' => $aiService->healthCheck() ? 'ok' : 'degraded',
+                    ],
+                    'trading_service' => [
+                        'status' => $tradingService->healthCheck() ? 'ok' : 'degraded',
                     ],
                     'queue' => [
                         'status' => 'ok',

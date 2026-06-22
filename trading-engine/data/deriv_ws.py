@@ -24,7 +24,7 @@ class DerivWebSocketClient:
         api_token: Optional[str] = None,
         ws_url: Optional[str] = None,
     ) -> None:
-        self.app_id = app_id or settings.DERIV_APP_ID
+        self.app_id = app_id or settings.deriv_ws_app_id
         self.api_token = api_token or settings.DERIV_API_TOKEN
         self.ws_url = ws_url or settings.DERIV_WS_URL
         self._ws: Optional[WebSocketClientProtocol] = None
@@ -33,6 +33,9 @@ class DerivWebSocketClient:
         self._tick_handlers: List[Callable[[str, float, int], None]] = []
         self._authorized = False
         self._balance: float = 0.0
+        self._loginid: str = ""
+        self._is_demo: bool = False
+        self._market_data_only: bool = False
         self._listen_task: Optional[asyncio.Task] = None
 
     def _next_id(self) -> int:
@@ -99,21 +102,150 @@ class DerivWebSocketClient:
             self._pending.pop(req_id, None)
             raise TimeoutError(f"Deriv API timeout for {payload}")
 
-    async def authorize(self) -> dict:
-        if not self.api_token:
-            raise ValueError("DERIV_API_TOKEN is required")
+    async def _authorize_via_otp(self) -> dict:
+        """New Deriv API: REST list accounts → OTP → authenticated WebSocket."""
+        from data.deriv_rest import get_otp_websocket_url, list_accounts, pick_demo_account_id
+
+        accounts = await list_accounts()
+        account_id = pick_demo_account_id(accounts)
+        if not account_id:
+            raise RuntimeError("No Deriv account found for OTP auth")
+
+        otp_url = await get_otp_websocket_url(account_id)
+        logger.info("Deriv OTP WebSocket URL obtained for account %s", account_id)
+
+        if self._listen_task:
+            self._listen_task.cancel()
+            try:
+                await self._listen_task
+            except asyncio.CancelledError:
+                pass
+        if self._ws:
+            await self._ws.close()
+
+        self.ws_url = otp_url
+        self._ws = await websockets.connect(otp_url, ping_interval=20, ping_timeout=20)
+        self._listen_task = asyncio.create_task(self._listen())
+
+        self._authorized = True
+        self._is_demo = "demo" in otp_url.lower()
+        self._loginid = account_id
+        self._market_data_only = False
+
+        try:
+            bal_resp = await self._send({"balance": 1})
+            bal = bal_resp.get("balance", {})
+            self._balance = float(bal.get("balance", 0))
+        except Exception:
+            logger.warning("Could not fetch balance on OTP WebSocket")
+
+        logger.info(
+            "Authorized via OTP account=%s demo=%s balance=%.2f",
+            self._loginid,
+            self._is_demo,
+            self._balance,
+        )
+        return {"loginid": self._loginid, "balance": self._balance, "is_virtual": int(self._is_demo)}
+
+    async def _authorize_legacy(self) -> dict:
         resp = await self._send({"authorize": self.api_token})
         if "error" in resp:
             raise RuntimeError(f"Deriv authorize failed: {resp['error']}")
+        auth = self._apply_auth_response(resp.get("authorize", {}))
+
+        require_demo = settings.DERIV_REQUIRE_DEMO and settings.TRADING_MODE != "live"
+        if require_demo and auth.get("is_virtual", 0) != 1:
+            demo_login = self._find_demo_loginid(auth)
+            if demo_login:
+                logger.info("Switching from live to demo account %s", demo_login)
+                switch_resp = await self._send({"switch_account": demo_login})
+                if "error" in switch_resp:
+                    raise RuntimeError(
+                        f"Live account connected but demo switch failed: {switch_resp['error']}. "
+                        "Create a new PAT on developers.deriv.com and select the DEMO account."
+                    )
+                auth = self._apply_auth_response(switch_resp.get("authorize", auth))
+            if auth.get("is_virtual", 0) != 1:
+                raise RuntimeError(
+                    f"Connected to LIVE account ({auth.get('loginid', 'unknown')}). "
+                    "Use a demo token or set TRADING_MODE=live only for real trading."
+                )
+
         self._authorized = True
-        auth = resp.get("authorize", {})
-        self._balance = float(auth.get("balance", 0))
-        logger.info("Authorized Deriv account balance=%.2f", self._balance)
+        self._market_data_only = False
+        logger.info(
+            "Authorized Deriv account loginid=%s balance=%.2f demo=%s",
+            self._loginid,
+            self._balance,
+            self._is_demo,
+        )
         return auth
+
+    async def authorize(self) -> dict:
+        if not self.api_token:
+            raise ValueError("DERIV_API_TOKEN is required")
+
+        token = str(self.api_token)
+        is_pat = token.startswith("pat_")
+        is_uuid_app = not settings.DERIV_APP_ID.strip().isdigit()
+
+        if is_pat and is_uuid_app:
+            try:
+                return await self._authorize_via_otp()
+            except Exception as exc:
+                logger.warning("OTP auth failed (%s), trying legacy WebSocket", exc)
+
+        try:
+            return await self._authorize_legacy()
+        except RuntimeError as exc:
+            err_str = str(exc)
+            if "InvalidToken" in err_str or "invalid" in err_str.lower():
+                self._market_data_only = True
+                self._authorized = False
+                logger.warning(
+                    "Token not valid on legacy WebSocket — using public market data. "
+                    "Create a new token via home.deriv.com → Profile → API Management "
+                    "(Trade + Account management scopes). See trading-engine/README.md"
+                )
+                return {}
+            raise
+
+    def _apply_auth_response(self, auth: dict) -> dict:
+        self._balance = float(auth.get("balance", 0))
+        self._loginid = str(auth.get("loginid", ""))
+        self._is_demo = auth.get("is_virtual", 0) == 1
+        return auth
+
+    @staticmethod
+    def _find_demo_loginid(auth: dict) -> Optional[str]:
+        forced = (settings.DERIV_DEMO_LOGINID or "").strip()
+        if forced:
+            return forced
+        for entry in auth.get("account_list", []) or []:
+            if entry.get("is_virtual"):
+                loginid = entry.get("loginid")
+                if loginid:
+                    return str(loginid)
+        loginid = str(auth.get("loginid", ""))
+        if loginid.startswith(("VRT", "VRW")):
+            return loginid
+        return None
+
+    @property
+    def loginid(self) -> str:
+        return self._loginid
+
+    @property
+    def is_demo(self) -> bool:
+        return self._is_demo
 
     @property
     def balance(self) -> float:
         return self._balance
+
+    @property
+    def market_data_only(self) -> bool:
+        return self._market_data_only
 
     def on_tick(self, handler: Callable[[str, float, int], None]) -> None:
         self._tick_handlers.append(handler)

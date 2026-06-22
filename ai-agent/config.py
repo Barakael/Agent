@@ -10,8 +10,13 @@ class Settings(BaseSettings):
     API_VERSION: str = "1.0.0"
     DEBUG: bool = os.getenv("DEBUG", "true").lower() == "true"
 
-    # OpenAI Configuration
+    # OpenAI Configuration (default: official OpenAI API)
+    # Leave OPENAI_BASE_URL empty for OpenAI cloud. When Ollama is on your VPS, set:
+    #   OPENAI_BASE_URL=https://your-vps-host/v1
+    #   OPENAI_API_KEY=ollama
+    #   OPENAI_MODEL=qwen2.5:14b
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "")
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5.5")
     OPENAI_REASONING_EFFORT: str = os.getenv("OPENAI_REASONING_EFFORT", "medium")
     OPENAI_TEMPERATURE: float = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
@@ -53,7 +58,8 @@ class Settings(BaseSettings):
         "browser.navigate,browser.read,browser.type,browser.click,browser.search,"
         "file.read,file.write,terminal.exec,system.inspect,media.play,media.search,"
         "cursor.prompt,cursor.resume,"
-        "trading.status,trading.pause,trading.resume,trading.metrics,trading.close_all",
+        "trading.status,trading.pause,trading.resume,trading.metrics,trading.close_all,"
+        "trading.positions,trading.preflight_summary,trading.analysis_sources",
     )
 
     # Local runner (VPS → desktop delegation)

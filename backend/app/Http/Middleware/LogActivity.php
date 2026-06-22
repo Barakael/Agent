@@ -17,28 +17,36 @@ class LogActivity
      */
     public function handle(Request $request, Closure $next): Response
     {
-        $key = 'api-rate:' . ($request->user()?->id ?? $request->ip());
-        $limit = 60;
-        $period = 60; // seconds
+        $isTradingPoll = $request->is('api/trading/*') && $request->isMethod('GET');
 
-        if (!Cache::has($key)) {
-            Cache::put($key, 0, $period);
-        }
+        if (!$isTradingPoll) {
+            $key = 'api-rate:' . ($request->user()?->id ?? $request->ip());
+            $limit = 120;
+            $period = 60; // seconds
 
-        $count = Cache::increment($key);
-        if ($count === false) {
-            Cache::put($key, 1, $period);
-            $count = 1;
-        }
+            if (!Cache::has($key)) {
+                Cache::put($key, 0, $period);
+            }
 
-        if ($count > $limit) {
-            return response()->json([
-                'message' => 'Too many requests. Please wait a moment and try again.',
-                'retry_after' => $period,
-            ], 429);
+            $count = Cache::increment($key);
+            if ($count === false) {
+                Cache::put($key, 1, $period);
+                $count = 1;
+            }
+
+            if ($count > $limit) {
+                return response()->json([
+                    'message' => 'Too many requests. Please wait a moment and try again.',
+                    'retry_after' => $period,
+                ], 429);
+            }
         }
 
         $response = $next($request);
+
+        if ($isTradingPoll) {
+            return $response;
+        }
 
         try {
             ActivityLog::create([

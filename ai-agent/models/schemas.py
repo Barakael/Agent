@@ -88,3 +88,10 @@ class ToolExecutionResponseSchema(BaseModel):
     status: str = Field(..., description="Execution status")
     output: Dict[str, Any] = Field(default_factory=dict, description="Execution output")
     trace_id: str = Field(..., description="Trace id")
+
+
+class TradingDailyAnalysisResponseSchema(BaseModel):
+    decision: str = Field(..., description="GO or NO-GO")
+    summary: str = Field(..., description="Narrative summary")
+    reasons: List[str] = Field(default_factory=list)
+    risks: List[str] = Field(default_factory=list)

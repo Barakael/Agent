@@ -18,8 +18,10 @@ from models.schemas import (
     TaskStatusResponseSchema,
     ToolExecutionRequestSchema,
     ToolExecutionResponseSchema,
+    TradingDailyAnalysisResponseSchema,
 )
 from services.ai_service import AIService
+from services.trading_analysis import synthesize_daily_analysis
 
 logging.basicConfig(
     level=logging.INFO if settings.DEBUG else logging.WARNING,
@@ -195,6 +197,23 @@ async def execute_tool(
     except ValueError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     return ToolExecutionResponseSchema(**result)
+
+
+@app.post("/trading/daily-analysis", response_model=TradingDailyAnalysisResponseSchema)
+async def trading_daily_analysis(
+    payload: dict,
+    auth: bool = Depends(validate_api_key),
+):
+    """Synthesize preflight + metrics into daily GO/NO-GO (never places orders)."""
+    ai_service: AIService = getattr(app.state, "ai_service", None)
+    if ai_service is None:
+        raise HTTPException(status_code=503, detail="AI service not available")
+    try:
+        result = synthesize_daily_analysis(ai_service, payload)
+        return TradingDailyAnalysisResponseSchema(**result)
+    except Exception:
+        logger.exception("Daily trading analysis failed")
+        raise HTTPException(status_code=502, detail="Daily analysis failed")
 
 
 @app.get("/traces/{trace_id}", response_class=JSONResponse)

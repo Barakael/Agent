@@ -76,6 +76,19 @@ class SignalLog(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class AnalysisRun(Base):
+    __tablename__ = "analysis_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_type = Column(String(32), nullable=False)  # preflight, open, close
+    symbol = Column(String(32), nullable=True)
+    passed = Column(Boolean, default=False)
+    decision = Column(String(16), default="NO-GO")  # GO, NO-GO
+    reasons = Column(Text, nullable=True)  # JSON list
+    sources = Column(Text, nullable=True)  # JSON dict
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 def get_engine():
     return create_engine(settings.DATABASE_URL, echo=settings.DEBUG)
 

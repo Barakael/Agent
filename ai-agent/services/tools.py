@@ -35,6 +35,8 @@ AGENT_TOOLS = [
                             "metrics",
                             "positions",
                             "close_all",
+                            "preflight_summary",
+                            "analysis_sources",
                         ],
                         "description": "Action to perform.",
                     },
@@ -75,6 +77,8 @@ Trading supervision (read/control bot — cannot autonomously open trades):
 - trading.pause / trading.resume — halt or resume autonomous trading
 - trading.metrics — win rate, drawdown, Sharpe
 - trading.positions — open positions
+- trading.preflight_summary — daily preflight GO/NO-GO, armed state, backtest results
+- trading.analysis_sources — status of each analysis data source
 - trading.close_all — emergency close all positions (use only when user asks)
 
 After cursor.prompt, tell the user to check the Cursor window for the running agent."""

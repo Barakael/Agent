@@ -13,10 +13,12 @@ async def main() -> int:
     client = DerivWebSocketClient()
     await client.connect()
     try:
-        if not settings.DERIV_API_TOKEN:
-            print("Set DERIV_API_TOKEN in .env to verify candles")
-            return 1
-        await client.authorize()
+        if settings.DERIV_API_TOKEN:
+            await client.authorize()
+            if client.market_data_only:
+                print("Note: PAT not authorized — using public market data (candles still work).")
+            elif client.is_demo:
+                print(f"Authorized demo account {client.loginid} balance={client.balance}")
         candles = await client.get_candles_history(
             symbol, settings.granularity_seconds, 10
         )

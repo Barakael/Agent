@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from journal.models import BotState, SignalLog, TradeJournal, TradingSession, init_db
+from journal.models import AnalysisRun, BotState, SignalLog, TradeJournal, TradingSession, init_db
 from risk.gate import RiskCheckResult
 from signals.engine import TradeSignal
 
@@ -65,6 +65,69 @@ class JournalWriter:
             session.add(trade)
             session.commit()
             return trade.id
+
+    def log_signal_rejected(self, signal: TradeSignal, reason: str) -> int:
+        with self.Session() as session:
+            entry = SignalLog(
+                symbol=signal.symbol,
+                direction=signal.direction.value,
+                rsi=signal.rsi,
+                macd=signal.macd,
+                price=signal.price,
+                epoch=signal.epoch,
+                reason=f"REJECTED: {reason} | {signal.reason}",
+                risk_decision="rejected",
+                risk_reason=reason,
+            )
+            session.add(entry)
+            session.commit()
+            return entry.id
+
+    def log_analysis_run(self, snapshot) -> int:
+        with self.Session() as session:
+            row = AnalysisRun(
+                run_type=snapshot.run_type,
+                symbol=snapshot.symbol,
+                passed=snapshot.passed,
+                decision=snapshot.decision,
+                reasons=json.dumps(snapshot.reasons),
+                sources=json.dumps(snapshot.sources, default=str),
+            )
+            session.add(row)
+            session.commit()
+            return row.id
+
+    def get_latest_preflight(self) -> Optional[dict]:
+        with self.Session() as session:
+            row = (
+                session.query(AnalysisRun)
+                .filter(AnalysisRun.run_type == "preflight")
+                .order_by(AnalysisRun.created_at.desc())
+                .first()
+            )
+            if not row:
+                return None
+            return {
+                "id": row.id,
+                "passed": row.passed,
+                "decision": row.decision,
+                "reasons": json.loads(row.reasons or "[]"),
+                "sources": json.loads(row.sources or "{}"),
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+
+    def get_open_trade_by_contract_id(self, contract_id: str) -> Optional[int]:
+        with self.Session() as session:
+            row = (
+                session.query(TradeJournal)
+                .filter(
+                    TradeJournal.contract_id == str(contract_id),
+                    TradeJournal.status == "open",
+                )
+                .order_by(TradeJournal.created_at.desc())
+                .first()
+            )
+            return row.id if row else None
 
     def log_trade_close(self, trade_id: int, exit_price: float, pnl: float) -> None:
         with self.Session() as session:

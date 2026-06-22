@@ -95,6 +95,27 @@ class EconomicCalendar:
                 return True, f"News pause: {event.title} ({event.currency})"
         return False, ""
 
+    def is_paused_for_currencies(
+        self,
+        currencies: set[str],
+        now: Optional[datetime] = None,
+    ) -> tuple[bool, str]:
+        """True if a high-impact event affects any of the given currencies."""
+        if not currencies:
+            return self.is_trading_paused(now)
+        now = now or datetime.now(timezone.utc)
+        for event in self._events:
+            if not event.is_high_impact:
+                continue
+            event_currency = event.currency.upper()
+            if event_currency != "ALL" and event_currency not in {c.upper() for c in currencies}:
+                continue
+            window_start = event.event_time - timedelta(minutes=self.pause_before)
+            window_end = event.event_time + timedelta(minutes=self.pause_after)
+            if window_start <= now <= window_end:
+                return True, f"News pause: {event.title} ({event.currency})"
+        return False, ""
+
     def upcoming_high_impact(self, hours: int = 24) -> List[EconomicEvent]:
         now = datetime.now(timezone.utc)
         cutoff = now + timedelta(hours=hours)

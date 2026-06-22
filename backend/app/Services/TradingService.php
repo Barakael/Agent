@@ -128,4 +128,24 @@ class TradingService
     {
         return $this->request('POST', '/backtest');
     }
+
+    public function runPreflight(): array
+    {
+        return $this->request('POST', '/preflight');
+    }
+
+    public function getPreflightLatest(): array
+    {
+        return $this->request('GET', '/preflight/latest');
+    }
+
+    public function getAnalysisSources(): array
+    {
+        return $this->request('GET', '/analysis/sources');
+    }
+
+    public function pushAiDecision(array $decision): array
+    {
+        return $this->request('POST', '/analysis/ai-decision', $decision);
+    }
 }

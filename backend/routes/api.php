@@ -90,6 +90,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/positions', [TradingController::class, 'positions']);
         Route::get('/journal', [TradingController::class, 'journal']);
         Route::get('/metrics', [TradingController::class, 'metrics']);
+        Route::get('/preflight', [TradingController::class, 'preflightLatest']);
+        Route::post('/preflight', [TradingController::class, 'runPreflight']);
+        Route::get('/analysis-decision', [TradingController::class, 'analysisDecision']);
+        Route::get('/analysis/sources', [TradingController::class, 'analysisSources']);
         Route::post('/pause', [TradingController::class, 'pause']);
         Route::post('/resume', [TradingController::class, 'resume']);
         Route::post('/kill', [TradingController::class, 'kill'])->middleware('role:admin');

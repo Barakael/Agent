@@ -11,15 +11,23 @@ logger = logging.getLogger(__name__)
 
 
 class AIService:
-    """Service for handling AI interactions with OpenAI API."""
+    """Service for handling AI interactions via OpenAI-compatible API."""
 
     def __init__(self):
-        """Initialize the AI Service with OpenAI client."""
+        """Initialize the AI Service. Uses OpenAI cloud by default."""
         if not settings.OPENAI_API_KEY:
             logger.error("OPENAI_API_KEY not configured")
             raise ValueError("OPENAI_API_KEY environment variable is required")
 
-        self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        client_kwargs: Dict[str, Any] = {"api_key": settings.OPENAI_API_KEY}
+        if settings.OPENAI_BASE_URL.strip():
+            client_kwargs["base_url"] = settings.OPENAI_BASE_URL.rstrip("/")
+            logger.info("LLM endpoint: %s (self-hosted)", client_kwargs["base_url"])
+        else:
+            logger.info("LLM endpoint: OpenAI API (cloud)")
+
+        self.client = OpenAI(**client_kwargs)
+        self.llm_base_url = settings.OPENAI_BASE_URL.strip()
         self.model = settings.OPENAI_MODEL
         self.reasoning_effort = settings.OPENAI_REASONING_EFFORT
         self.temperature = settings.OPENAI_TEMPERATURE
@@ -29,6 +37,8 @@ class AIService:
         self.execution_traces: Dict[str, Dict[str, Any]] = {}
 
     def _uses_reasoning_model(self) -> bool:
+        if self.llm_base_url:
+            return False
         model = self.model.lower()
         return model.startswith(("gpt-5", "o1", "o3", "o4"))
 
@@ -432,14 +442,12 @@ class AIService:
         return truncated
 
     def health_check(self) -> bool:
-        """
-        Check if OpenAI API is accessible.
-        """
+        """Check if the configured LLM endpoint is reachable."""
         try:
-            # Try to list models (lightweight operation)
             self.client.models.list()
-            logger.info("OpenAI API health check passed")
+            label = "self-hosted" if self.llm_base_url else "OpenAI"
+            logger.info("%s API health check passed", label)
             return True
         except Exception as e:
-            logger.error(f"OpenAI API health check failed: {str(e)}")
+            logger.error("LLM API health check failed: %s", e)
             return False

@@ -7,6 +7,13 @@ export type TradingStatus = {
   daily_pnl?: number
   kill_switch_active?: boolean
   balance?: number
+  loginid?: string
+  is_demo?: boolean
+  account_type?: 'demo' | 'live'
+  account_error?: string | null
+  analysis_armed?: boolean
+  preflight?: PreflightSnapshot | null
+  sources?: Record<string, string>
   session?: {
     session_open: boolean
     must_force_close: boolean
@@ -14,6 +21,29 @@ export type TradingStatus = {
     close_time_utc: string
   }
   not_configured?: boolean
+}
+
+export type PreflightSnapshot = {
+  passed?: boolean
+  decision?: string
+  run_type?: string
+  reasons?: string[]
+  sources?: {
+    backtest?: Record<string, { passed?: boolean; total_pnl?: number; win_rate?: number }>
+    metrics?: TradingMetrics
+    upcoming_high_impact?: Array<{ title: string; currency: string; time: string }>
+    ai_decision?: AnalysisDecision
+  }
+}
+
+export type AnalysisDecision = {
+  id?: number
+  decision: string
+  summary?: string
+  reasons?: string[]
+  risks?: string[]
+  source?: string
+  created_at?: string
 }
 
 export type TradingPosition = {
@@ -69,6 +99,30 @@ export async function fetchTradingJournal(limit = 50) {
 
 export async function fetchTradingMetrics() {
   const response = await api.get<{ data: TradingMetrics }>('/trading/metrics')
+  return response.data.data
+}
+
+export async function fetchPreflightLatest() {
+  const response = await api.get<{ data: PreflightSnapshot | null; analysis_armed: boolean }>(
+    '/trading/preflight',
+  )
+  return response.data
+}
+
+export async function runPreflight() {
+  const response = await api.post<{ data: PreflightSnapshot; analysis_armed: boolean }>(
+    '/trading/preflight',
+  )
+  return response.data
+}
+
+export async function fetchAnalysisSources() {
+  const response = await api.get<{ data: Record<string, string> }>('/trading/analysis/sources')
+  return response.data.data
+}
+
+export async function fetchAnalysisDecision() {
+  const response = await api.get<{ data: AnalysisDecision | null }>('/trading/analysis-decision')
   return response.data.data
 }
 

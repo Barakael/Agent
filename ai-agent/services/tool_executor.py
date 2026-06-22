@@ -96,6 +96,10 @@ class ToolExecutor:
             return {"result": "closed", **self.trading.close_all()}
         if action == "positions":
             return {"result": "ok", **self.trading.positions()}
+        if action == "preflight_summary":
+            return {"result": "ok", **self.trading.preflight_latest()}
+        if action == "analysis_sources":
+            return {"result": "ok", **self.trading.analysis_sources()}
         raise ValueError(f"Unsupported trading action '{action}'.")
 
     def _browser_navigate(self, payload: Dict[str, Any]) -> Dict[str, Any]:

@@ -15,13 +15,29 @@ class Settings(BaseSettings):
     BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:8000")
     BACKEND_API_KEY: str = os.getenv("BACKEND_API_KEY", "")
 
-    # Deriv
+    # Deriv — PAT from developers.deriv.com Dashboard → API tokens (demo account)
     DERIV_APP_ID: str = os.getenv("DERIV_APP_ID", "1089")
+    DERIV_CLIENT_ID: str = os.getenv("DERIV_CLIENT_ID", "")
     DERIV_API_TOKEN: str = os.getenv("DERIV_API_TOKEN", "")
     DERIV_WS_URL: str = os.getenv(
         "DERIV_WS_URL",
         f"wss://ws.derivws.com/websockets/v3?app_id={os.getenv('DERIV_APP_ID', '1089')}",
     )
+    DERIV_WS_APP_ID: str = os.getenv("DERIV_WS_APP_ID", "1089")
+    # Optional: force demo wallet (VRTC… login id)
+    DERIV_DEMO_LOGINID: str = os.getenv("DERIV_DEMO_LOGINID", "")
+    # New API: options account id for OTP WebSocket (from REST list accounts)
+    DERIV_ACCOUNT_ID: str = os.getenv("DERIV_ACCOUNT_ID", "")
+
+    # Analysis engine (ATAE)
+    ANALYSIS_REQUIRE_PREFLIGHT: bool = os.getenv("ANALYSIS_REQUIRE_PREFLIGHT", "true").lower() == "true"
+    ANALYSIS_SCENARIO_WINDOW_BARS: int = int(os.getenv("ANALYSIS_SCENARIO_WINDOW_BARS", "50"))
+    ANALYSIS_MIN_SCENARIO_WIN_RATE: float = float(os.getenv("ANALYSIS_MIN_SCENARIO_WIN_RATE", "0.45"))
+    ANALYSIS_PREFLIGHT_BACKTEST_BARS: int = int(os.getenv("ANALYSIS_PREFLIGHT_BACKTEST_BARS", "500"))
+    ANALYSIS_AI_DECISION_URL: str = os.getenv("ANALYSIS_AI_DECISION_URL", "")
+
+    # Block live account unless TRADING_MODE=live
+    DERIV_REQUIRE_DEMO: bool = os.getenv("DERIV_REQUIRE_DEMO", "true").lower() == "true"
 
     # Trading mode: log_only | demo | live
     TRADING_MODE: str = os.getenv("TRADING_MODE", "log_only")
@@ -80,10 +96,16 @@ class Settings(BaseSettings):
     def granularity_seconds(self) -> int:
         return self.CANDLE_TIMEFRAME_MINUTES * 60
 
+    @property
+    def deriv_ws_app_id(self) -> str:
+        """Legacy WebSocket requires a numeric app_id; OAuth client UUIDs are not valid here."""
+        raw = self.DERIV_APP_ID.strip()
+        if raw.isdigit():
+            return raw
+        return self.DERIV_WS_APP_ID.strip() or "1089"
+
 
 settings = Settings()
-# Fix DERIV_WS_URL to use app_id from settings after load
-if "app_id=" in settings.DERIV_WS_URL and settings.DERIV_APP_ID:
-    settings.DERIV_WS_URL = (
-        f"wss://ws.derivws.com/websockets/v3?app_id={settings.DERIV_APP_ID}"
-    )
+settings.DERIV_WS_URL = (
+    f"wss://ws.derivws.com/websockets/v3?app_id={settings.deriv_ws_app_id}"
+)

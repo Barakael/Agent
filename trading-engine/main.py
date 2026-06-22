@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from typing import Any, Dict, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -83,6 +81,7 @@ async def health(auth: bool = Depends(validate_api_key)):
         "version": settings.API_VERSION,
         "mode": settings.TRADING_MODE,
         "bot_state": bot.state if bot else "stopped",
+        "analysis_armed": bot.analysis_armed if bot else False,
     }
 
 
@@ -90,7 +89,50 @@ async def health(auth: bool = Depends(validate_api_key)):
 async def status(auth: bool = Depends(validate_api_key)):
     if bot is None:
         return {"state": "stopped", "mode": settings.TRADING_MODE, "not_configured": True}
+    await bot.probe_deriv_account()
     return bot.status()
+
+
+@app.get("/preflight/latest")
+async def preflight_latest(auth: bool = Depends(validate_api_key)):
+    latest = journal.get_latest_preflight()
+    armed = bot.analysis_armed if bot else False
+    return {"data": latest, "analysis_armed": armed}
+
+
+@app.post("/preflight")
+async def run_preflight(auth: bool = Depends(validate_api_key)):
+    if bot is None:
+        raise HTTPException(status_code=503, detail="Bot not initialized")
+    try:
+        result = await bot.run_preflight()
+        return {"data": result, "analysis_armed": bot.analysis_armed}
+    except Exception as exc:
+        logger.exception("Preflight failed")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/analysis/sources")
+async def analysis_sources(auth: bool = Depends(validate_api_key)):
+    if bot is None:
+        return {"data": {}}
+    return {"data": bot.analysis.source_status()}
+
+
+class AiDecisionRequest(BaseModel):
+    decision: str
+    summary: str = ""
+    reasons: list = Field(default_factory=list)
+    risks: list = Field(default_factory=list)
+    source: str = "ai-agent"
+
+
+@app.post("/analysis/ai-decision")
+async def set_ai_decision(body: AiDecisionRequest, auth: bool = Depends(validate_api_key)):
+    if bot is None:
+        raise HTTPException(status_code=503, detail="Bot not initialized")
+    bot.analysis.set_ai_decision(body.model_dump())
+    return {"status": "ok", "decision": body.decision}
 
 
 @app.get("/positions")
@@ -136,8 +178,17 @@ async def kill(auth: bool = Depends(validate_api_key)):
 async def start_bot(auth: bool = Depends(validate_api_key)):
     if bot is None:
         raise HTTPException(status_code=503, detail="Bot not initialized")
-    await bot.start()
-    return {"status": "running"}
+    try:
+        await bot.start()
+    except Exception as exc:
+        logger.exception("Bot start failed")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {
+        "status": "running",
+        "analysis_armed": bot.analysis_armed,
+        "account_error": bot._account_probe_error,
+        "deriv_connected": bot.client._authorized,
+    }
 
 
 @app.post("/stop")
@@ -169,7 +220,14 @@ async def manual_order(body: ManualOrderRequest, auth: bool = Depends(validate_a
 async def close_position(contract_id: int, auth: bool = Depends(validate_api_key)):
     if bot is None:
         raise HTTPException(status_code=503, detail="Bot not available")
-    result = await bot.positions.close_position(contract_id)
+    await bot.positions.refresh()
+    pos = next((p for p in bot.positions.positions if p.get("contract_id") == contract_id), {})
+    symbol = pos.get("underlying") or pos.get("symbol") or ""
+    df = bot.aggregator.get_dataframe(symbol) if symbol else None
+    try:
+        result = await bot.positions.close_position(contract_id, df=df)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     return {"status": "closed", "data": result}
 
 
@@ -177,7 +235,8 @@ async def close_position(contract_id: int, auth: bool = Depends(validate_api_key
 async def close_all(auth: bool = Depends(validate_api_key)):
     if bot is None:
         raise HTTPException(status_code=503, detail="Bot not available")
-    results = await bot.positions.close_all()
+    dfs = {s: bot.aggregator.get_dataframe(s) for s in settings.pairs_list}
+    results = await bot.positions.close_all(df_by_symbol=dfs)
     return {"status": "closed", "count": len(results)}
 
 
@@ -190,7 +249,6 @@ async def run_backtest(auth: bool = Depends(validate_api_key)):
 
 @app.get("/candles/{symbol}")
 async def get_candles(symbol: str, auth: bool = Depends(validate_api_key)):
-    """Return aggregated candles for chart verification (A1 gate)."""
     if bot is None:
         raise HTTPException(status_code=503, detail="Bot not available")
     df = bot.aggregator.get_dataframe(symbol)

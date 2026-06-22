@@ -56,6 +56,15 @@ class TradingClient:
     def close_all(self) -> Dict[str, Any]:
         return self._request("POST", "/positions/close-all")
 
+    def preflight_latest(self) -> Dict[str, Any]:
+        return self._request("GET", "/preflight/latest")
+
+    def preflight_summary(self) -> Dict[str, Any]:
+        return self.preflight_latest()
+
+    def analysis_sources(self) -> Dict[str, Any]:
+        return self._request("GET", "/analysis/sources")
+
     def health(self) -> bool:
         try:
             self._request("GET", "/health")

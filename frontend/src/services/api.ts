@@ -19,8 +19,16 @@ api.interceptors.response.use(
         window.location.assign('/login')
       }
     }
-    if (error.response?.data?.message) {
-      return Promise.reject(new Error(error.response.data.message))
+    const detail = error.response?.data?.detail
+    const message = error.response?.data?.message
+    const text =
+      typeof detail === 'string'
+        ? detail
+        : typeof message === 'string'
+          ? message
+          : null
+    if (text) {
+      return Promise.reject(new Error(text))
     }
     return Promise.reject(error)
   },

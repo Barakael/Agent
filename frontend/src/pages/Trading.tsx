@@ -4,6 +4,7 @@ import EmptyState from '../components/ui/EmptyState'
 import {
   closeAllPositions,
   closePosition,
+  fetchAnalysisDecision,
   fetchTradingJournal,
   fetchTradingMetrics,
   fetchTradingPositions,
@@ -12,7 +13,10 @@ import {
   pauseTrading,
   placeManualOrder,
   resumeTrading,
+  runPreflight,
   startTradingBot,
+  type AnalysisDecision,
+  type PreflightSnapshot,
   type TradeJournalEntry,
   type TradingMetrics,
   type TradingPosition,
@@ -26,6 +30,11 @@ export default function TradingPage() {
   const [positions, setPositions] = useState<TradingPosition[]>([])
   const [journal, setJournal] = useState<TradeJournalEntry[]>([])
   const [metrics, setMetrics] = useState<TradingMetrics | null>(null)
+  const [preflight, setPreflight] = useState<PreflightSnapshot | null>(null)
+  const [analysisArmed, setAnalysisArmed] = useState(false)
+  const [sources, setSources] = useState<Record<string, string>>({})
+  const [aiDecision, setAiDecision] = useState<AnalysisDecision | null>(null)
+  const [preflightRunning, setPreflightRunning] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -38,16 +47,21 @@ export default function TradingPage() {
   const refresh = useCallback(async () => {
     try {
       setError('')
-      const [s, p, j, m] = await Promise.all([
+      const [s, p, j, m, ai] = await Promise.all([
         fetchTradingStatus(),
         fetchTradingPositions(),
         fetchTradingJournal(),
         fetchTradingMetrics(),
+        fetchAnalysisDecision(),
       ])
       setStatus(s)
       setPositions(p)
       setJournal(j)
       setMetrics(m)
+      setPreflight(s.preflight ?? null)
+      setAnalysisArmed(s.analysis_armed ?? false)
+      setSources(s.sources ?? {})
+      setAiDecision(ai)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load trading data')
     } finally {
@@ -57,7 +71,7 @@ export default function TradingPage() {
 
   useEffect(() => {
     void refresh()
-    const interval = setInterval(() => void refresh(), 15000)
+    const interval = setInterval(() => void refresh(), 30000)
     return () => clearInterval(interval)
   }, [refresh])
 
@@ -88,6 +102,33 @@ export default function TradingPage() {
           ? 'text-red-600'
           : 'text-slate-500'
 
+  const handleRunPreflight = async () => {
+    setPreflightRunning(true)
+    try {
+      const result = await runPreflight()
+      setPreflight(result.data)
+      setAnalysisArmed(result.analysis_armed)
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Preflight failed')
+    } finally {
+      setPreflightRunning(false)
+    }
+  }
+
+  const handleStart = async () => {
+    try {
+      setError('')
+      await startTradingBot()
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to start bot')
+    }
+  }
+
+  const armedColor = analysisArmed ? 'text-emerald-600' : 'text-red-600'
+  const preflightDecision = preflight?.decision ?? 'NO-GO'
+
   return (
     <AppShell title="Trading">
       {error ? (
@@ -95,6 +136,110 @@ export default function TradingPage() {
           {error}
         </div>
       ) : null}
+
+      <section className="panel mb-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Analysis Engine (ATAE)
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              No orders execute unless preflight passes and per-trade scenario analysis succeeds.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn-secondary text-xs"
+            disabled={preflightRunning}
+            onClick={() => void handleRunPreflight()}
+          >
+            {preflightRunning ? 'Running…' : 'Run Preflight'}
+          </button>
+        </div>
+
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-lg border p-3 dark:border-slate-700">
+            <p className="text-xs text-slate-500">Armed</p>
+            <p className={`text-lg font-semibold uppercase ${armedColor}`}>
+              {analysisArmed ? 'Yes' : 'Blocked'}
+            </p>
+          </div>
+          <div className="rounded-lg border p-3 dark:border-slate-700">
+            <p className="text-xs text-slate-500">Preflight</p>
+            <p
+              className={`text-lg font-semibold uppercase ${
+                preflightDecision === 'GO' ? 'text-emerald-600' : 'text-red-600'
+              }`}
+            >
+              {preflightDecision}
+            </p>
+          </div>
+          <div className="rounded-lg border p-3 dark:border-slate-700">
+            <p className="text-xs text-slate-500">AI Daily</p>
+            <p
+              className={`text-lg font-semibold uppercase ${
+                aiDecision?.decision === 'GO' ? 'text-emerald-600' : 'text-slate-500'
+              }`}
+            >
+              {aiDecision?.decision ?? '—'}
+            </p>
+          </div>
+          <div className="rounded-lg border p-3 dark:border-slate-700">
+            <p className="text-xs text-slate-500">Mode gate</p>
+            <p className="text-lg font-semibold">{status?.mode ?? '—'}</p>
+          </div>
+        </div>
+
+        {!analysisArmed ? (
+          <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+            Trading blocked — run daily preflight or fix failing checks:{' '}
+            {(preflight?.reasons ?? []).slice(0, 4).join('; ') || 'no preflight run yet'}
+          </p>
+        ) : null}
+
+        {Object.keys(sources).length > 0 ? (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {Object.entries(sources).map(([name, state]) => (
+              <span
+                key={name}
+                className="rounded-full border px-2 py-0.5 text-xs dark:border-slate-700"
+              >
+                {name}: {state}
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        {preflight?.sources?.backtest ? (
+          <div className="mt-3 overflow-x-auto">
+            <p className="mb-1 text-xs font-medium text-slate-600 dark:text-slate-400">Backtest</p>
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b dark:border-slate-700">
+                  <th className="py-1 pr-3">Pair</th>
+                  <th className="py-1 pr-3">Pass</th>
+                  <th className="py-1 pr-3">Win rate</th>
+                  <th className="py-1">P&L</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(preflight.sources.backtest).map(([pair, bt]) => (
+                  <tr key={pair} className="border-b dark:border-slate-800">
+                    <td className="py-1 pr-3">{pair}</td>
+                    <td className="py-1 pr-3">{bt.passed ? '✓' : '✗'}</td>
+                    <td className="py-1 pr-3">{bt.win_rate != null ? `${bt.win_rate}%` : '—'}</td>
+                    <td className="py-1">{bt.total_pnl ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+
+        {aiDecision?.summary ? (
+          <p className="mt-3 text-xs text-slate-600 dark:text-slate-400">{aiDecision.summary}</p>
+        ) : null}
+      </section>
 
       <section className="grid gap-4 xl:grid-cols-3">
         <article className="panel xl:col-span-1">
@@ -106,6 +251,28 @@ export default function TradingPage() {
               <p>
                 State: <span className={`font-semibold uppercase ${stateColor}`}>{status?.state ?? 'unknown'}</span>
               </p>
+              <p>
+                Account:{' '}
+                <span
+                  className={`font-semibold uppercase ${
+                    status?.is_demo ? 'text-emerald-600' : 'text-red-600'
+                  }`}
+                >
+                  {status?.account_type ?? '—'}
+                </span>
+                {status?.loginid ? (
+                  <span className="ml-1 text-xs text-slate-500">({status.loginid})</span>
+                ) : null}
+              </p>
+              {!status?.is_demo && status?.loginid ? (
+                <p className="text-xs font-medium text-red-600">
+                  Live account detected — create a demo PAT on developers.deriv.com or bot will block
+                  start.
+                </p>
+              ) : null}
+              {status?.account_error ? (
+                <p className="text-xs font-medium text-red-600">{status.account_error}</p>
+              ) : null}
               <p>Mode: {status?.mode ?? '—'}</p>
               <p>Daily P&L: ${status?.daily_pnl?.toFixed(2) ?? '0.00'}</p>
               <p>Balance: ${status?.balance?.toFixed(2) ?? '—'}</p>
@@ -121,7 +288,7 @@ export default function TradingPage() {
           )}
 
           <div className="mt-4 flex flex-wrap gap-2">
-            <button type="button" className="btn-secondary text-xs" onClick={() => void startTradingBot().then(refresh)}>
+            <button type="button" className="btn-secondary text-xs" onClick={() => void handleStart()}>
               Start
             </button>
             <button type="button" className="btn-secondary text-xs" onClick={() => void pauseTrading().then(refresh)}>

@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { RealtimeProvider } from './contexts/RealtimeContext'
+import { isMessagingMobile } from './config/messaging'
 import LoginPage from './pages/Auth/Login'
 import RegisterPage from './pages/Auth/Register'
 import DashboardPage from './pages/Dashboard'
@@ -32,6 +33,24 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
   return children
 }
 
+function HomeRedirect() {
+  if (isMessagingMobile) {
+    return <Navigate to="/chat" replace />
+  }
+  return (
+    <ProtectedRoute>
+      <DashboardPage />
+    </ProtectedRoute>
+  )
+}
+
+function MessagingGuard({ children }: { children: ReactNode }) {
+  if (isMessagingMobile) {
+    return <Navigate to="/chat" replace />
+  }
+  return <ProtectedRoute>{children}</ProtectedRoute>
+}
+
 function App() {
   return (
     <AuthProvider>
@@ -40,19 +59,19 @@ function App() {
           <BrowserRouter>
             <Routes>
               <Route path="/login" element={<LoginPage />} />
-              <Route path="/register" element={<RegisterPage />} />
-              <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+              <Route path="/register" element={isMessagingMobile ? <Navigate to="/login" replace /> : <RegisterPage />} />
+              <Route path="/" element={<HomeRedirect />} />
               <Route path="/chat" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
-              <Route path="/tasks" element={<ProtectedRoute><TasksPage /></ProtectedRoute>} />
-              <Route path="/trading" element={<ProtectedRoute><TradingPage /></ProtectedRoute>} />
-              <Route path="/activity" element={<ProtectedRoute><ActivityLogsPage /></ProtectedRoute>} />
-              <Route path="/memory" element={<ProtectedRoute><MemoryPage /></ProtectedRoute>} />
-              <Route path="/permissions" element={<ProtectedRoute><PermissionsPage /></ProtectedRoute>} />
-              <Route path="/automation" element={<ProtectedRoute><AutomationMonitorPage /></ProtectedRoute>} />
-              <Route path="/notifications" element={<ProtectedRoute><NotificationsPage /></ProtectedRoute>} />
-              <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
-              <Route path="/status" element={<ProtectedRoute><SystemStatusPage /></ProtectedRoute>} />
-              <Route path="*" element={<Navigate to="/" replace />} />
+              <Route path="/tasks" element={<MessagingGuard><TasksPage /></MessagingGuard>} />
+              <Route path="/trading" element={<MessagingGuard><TradingPage /></MessagingGuard>} />
+              <Route path="/activity" element={<MessagingGuard><ActivityLogsPage /></MessagingGuard>} />
+              <Route path="/memory" element={<MessagingGuard><MemoryPage /></MessagingGuard>} />
+              <Route path="/permissions" element={<MessagingGuard><PermissionsPage /></MessagingGuard>} />
+              <Route path="/automation" element={<MessagingGuard><AutomationMonitorPage /></MessagingGuard>} />
+              <Route path="/notifications" element={<MessagingGuard><NotificationsPage /></MessagingGuard>} />
+              <Route path="/profile" element={<MessagingGuard><ProfilePage /></MessagingGuard>} />
+              <Route path="/status" element={<MessagingGuard><SystemStatusPage /></MessagingGuard>} />
+              <Route path="*" element={<Navigate to={isMessagingMobile ? '/chat' : '/'} replace />} />
             </Routes>
           </BrowserRouter>
         </RealtimeProvider>

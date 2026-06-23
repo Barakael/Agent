@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     OPENAI_REASONING_EFFORT: str = os.getenv("OPENAI_REASONING_EFFORT", "medium")
     OPENAI_TEMPERATURE: float = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
     OPENAI_MAX_TOKENS: int = int(os.getenv("OPENAI_MAX_TOKENS", "4096"))
+    OPENAI_WHISPER_MODEL: str = os.getenv("OPENAI_WHISPER_MODEL", "whisper-1")
+    OPENAI_TTS_MODEL: str = os.getenv("OPENAI_TTS_MODEL", "tts-1")
+    OPENAI_TTS_VOICE: str = os.getenv("OPENAI_TTS_VOICE", "nova")
+    OPENAI_TTS_MAX_CHARS: int = int(os.getenv("OPENAI_TTS_MAX_CHARS", "4096"))
 
     # Backend Configuration
     BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:8000")

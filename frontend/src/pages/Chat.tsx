@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { Archive, Edit3, Mic, Plus, Search, Trash2, Volume2 } from 'lucide-react'
 import AppShell from '../components/layout/AppShell'
+import { isMessagingMobile } from '../config/messaging'
 import {
   archiveConversation,
   createConversation,
@@ -12,6 +13,8 @@ import {
   type ConversationSummary,
   type MessagePayload,
 } from '../services/conversationService'
+import { fetchRunnerStatus, type RunnerStatus } from '../services/platformService'
+import { playAudioBlob, speakText, transcribeAudio } from '../services/voiceService'
 import { useRealtime } from '../contexts/RealtimeContext'
 
 export default function ChatPage() {
@@ -25,10 +28,16 @@ export default function ChatPage() {
   const [sending, setSending] = useState(false)
   const [assistantTyping, setAssistantTyping] = useState(false)
   const [voiceListening, setVoiceListening] = useState(false)
+  const [voiceRecording, setVoiceRecording] = useState(false)
+  const [voiceTranscribing, setVoiceTranscribing] = useState(false)
+  const [autoReadReplies, setAutoReadReplies] = useState(isMessagingMobile)
+  const [runnerStatus, setRunnerStatus] = useState<RunnerStatus | null>(null)
   const [voiceHint, setVoiceHint] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const recognitionRef = useRef<SpeechRecognition | null>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const recordChunksRef = useRef<Blob[]>([])
 
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
     messagesEndRef.current?.scrollIntoView({ behavior, block: 'end' })
@@ -89,7 +98,22 @@ export default function ChatPage() {
   useEffect(() => {
     return () => {
       recognitionRef.current?.stop()
+      mediaRecorderRef.current?.stop()
     }
+  }, [])
+
+  useEffect(() => {
+    const loadRunner = async () => {
+      try {
+        const status = await fetchRunnerStatus()
+        setRunnerStatus(status)
+      } catch {
+        setRunnerStatus({ runner_enabled: false, online: false, platform: null })
+      }
+    }
+    void loadRunner()
+    const interval = window.setInterval(() => void loadRunner(), 30000)
+    return () => window.clearInterval(interval)
   }, [])
 
   const filteredConversations = useMemo(
@@ -148,25 +172,43 @@ export default function ChatPage() {
     }
   }
 
-  const handleSendMessage = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!selectedConversation || !newMessage.trim()) return
+  const speakAssistantText = async (text: string) => {
+    try {
+      const blob = await speakText(text)
+      playAudioBlob(blob)
+    } catch {
+      const utterance = new SpeechSynthesisUtterance(text)
+      window.speechSynthesis.speak(utterance)
+    }
+  }
+
+  const submitMessage = async (text: string) => {
+    if (!selectedConversation || !text.trim()) return
 
     setSending(true)
     setAssistantTyping(true)
     try {
-      const response = await sendMessage(selectedConversation.id, newMessage.trim())
+      const response = await sendMessage(selectedConversation.id, text.trim())
       const payload = response.data as { user_message: MessagePayload; assistant_message: MessagePayload }
       setMessages((current) => [...current, payload.user_message, payload.assistant_message])
       setNewMessage('')
       setAssistantTyping(false)
       setError(null)
+      if (autoReadReplies && payload.assistant_message.content) {
+        void speakAssistantText(payload.assistant_message.content)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to send message.')
       setAssistantTyping(false)
     } finally {
       setSending(false)
     }
+  }
+
+  const handleSendMessage = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!selectedConversation || !newMessage.trim()) return
+    await submitMessage(newMessage.trim())
   }
 
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -180,7 +222,78 @@ export default function ChatPage() {
     event.currentTarget.form?.requestSubmit()
   }
 
+  const stopServerRecording = async () => {
+    const recorder = mediaRecorderRef.current
+    if (!recorder || recorder.state === 'inactive') {
+      return
+    }
+    setVoiceRecording(false)
+    setVoiceTranscribing(true)
+    setVoiceHint('Transcribing…')
+
+    await new Promise<void>((resolve) => {
+      recorder.onstop = () => resolve()
+      recorder.stop()
+    })
+
+    try {
+      const mime = recorder.mimeType || 'audio/webm'
+      const blob = new Blob(recordChunksRef.current, { type: mime })
+      recordChunksRef.current = []
+      if (blob.size < 100) {
+        setVoiceHint('Recording too short. Hold mic and speak.')
+        return
+      }
+      const ext = mime.includes('mp4') ? 'recording.m4a' : 'recording.webm'
+      const text = await transcribeAudio(blob, ext)
+      setNewMessage(text)
+      if (selectedConversation) {
+        await submitMessage(text)
+      }
+      setVoiceHint(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Voice transcription failed.')
+      setVoiceHint(null)
+    } finally {
+      setVoiceTranscribing(false)
+      mediaRecorderRef.current = null
+    }
+  }
+
+  const startServerRecording = async () => {
+    if (voiceRecording || voiceTranscribing || sending) return
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4'
+      const recorder = new MediaRecorder(stream, { mimeType: mime })
+      recordChunksRef.current = []
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          recordChunksRef.current.push(event.data)
+        }
+      }
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop())
+      }
+      mediaRecorderRef.current = recorder
+      recorder.start()
+      setVoiceRecording(true)
+      setVoiceHint('Recording… release to send')
+      setError(null)
+    } catch {
+      setError('Microphone access denied or unavailable.')
+    }
+  }
+
   const toggleVoiceInput = () => {
+    if (typeof MediaRecorder !== 'undefined' && typeof navigator.mediaDevices?.getUserMedia === 'function') {
+      if (voiceRecording) {
+        void stopServerRecording()
+      } else {
+        void startServerRecording()
+      }
+      return
+    }
     if (voiceListening && recognitionRef.current) {
       recognitionRef.current.stop()
       setVoiceListening(false)
@@ -232,13 +345,20 @@ export default function ChatPage() {
   const readLastAssistantMessage = () => {
     const latestAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
     if (!latestAssistant) return
-    const utterance = new SpeechSynthesisUtterance(latestAssistant.content)
-    window.speechSynthesis.speak(utterance)
+    void speakAssistantText(latestAssistant.content)
   }
+
+  const runnerLabel = runnerStatus
+    ? runnerStatus.online
+      ? `PC online${runnerStatus.platform ? ` (${runnerStatus.platform})` : ''}`
+      : runnerStatus.runner_enabled
+        ? 'PC offline'
+        : 'Runner disabled'
+    : 'Checking PC…'
 
   return (
     <AppShell title="Wayda" fullHeight>
-      <section className="wayda-chat-layout">
+      <section className={`wayda-chat-layout ${isMessagingMobile ? 'wayda-messaging-mobile' : ''}`}>
         <aside className="wayda-thread-pane">
           <div className="wayda-thread-toolbar">
             <button type="button" className="wayda-ghost-button" onClick={handleCreateConversation}>
@@ -285,6 +405,14 @@ export default function ChatPage() {
         </aside>
 
         <div className="wayda-chat-pane">
+          <div className="wayda-chat-pane-head">
+            <span
+              className={`wayda-runner-badge ${runnerStatus?.online ? 'online' : 'offline'}`}
+              title={runnerLabel}
+            >
+              {runnerLabel}
+            </span>
+          </div>
           <div className="wayda-messages">
             {messages.length === 0 ? (
               <div className="wayda-empty-state">
@@ -328,29 +456,52 @@ export default function ChatPage() {
 
           <div className="wayda-composer-wrap">
             {error ? <p className="wayda-error">{error}</p> : null}
+            {voiceRecording ? <p className="wayda-voice-status">Recording… release mic to send</p> : null}
+            {voiceTranscribing ? <p className="wayda-voice-status">Transcribing…</p> : null}
             {voiceListening ? <p className="wayda-voice-status">Listening… speak now (click mic to stop)</p> : null}
-            {!voiceListening && voiceHint ? <p className="wayda-voice-status">{voiceHint}</p> : null}
+            {!voiceRecording && !voiceTranscribing && !voiceListening && voiceHint ? (
+              <p className="wayda-voice-status">{voiceHint}</p>
+            ) : null}
             <form onSubmit={handleSendMessage} className="wayda-composer">
               <textarea
                 value={newMessage}
                 onChange={(event) => setNewMessage(event.target.value)}
                 onKeyDown={handleComposerKeyDown}
                 placeholder={selectedConversation ? 'Message Wayda...' : 'Create or select a conversation...'}
-                disabled={sending || !selectedConversation}
+                disabled={sending || !selectedConversation || voiceTranscribing}
               />
               <div className="wayda-composer-actions">
                 <button
                   type="button"
-                  className={`wayda-icon-button ${voiceListening ? 'wayda-icon-button-active' : ''}`}
+                  className={`wayda-icon-button wayda-mic-button ${voiceRecording || voiceListening ? 'wayda-icon-button-active' : ''}`}
                   onClick={toggleVoiceInput}
-                  title={voiceListening ? 'Stop voice input' : 'Voice input (Chrome/Edge)'}
+                  onPointerDown={(event) => {
+                    if (event.pointerType === 'touch' && !voiceRecording) {
+                      event.preventDefault()
+                      void startServerRecording()
+                    }
+                  }}
+                  onPointerUp={(event) => {
+                    if (event.pointerType === 'touch' && voiceRecording) {
+                      event.preventDefault()
+                      void stopServerRecording()
+                    }
+                  }}
+                  disabled={voiceTranscribing || sending}
+                  title={voiceRecording ? 'Stop recording' : 'Hold to talk (tap on phone)'}
                 >
-                  <Mic size={15} className={voiceListening ? 'text-emerald-400' : ''} />
+                  <Mic size={18} className={voiceRecording || voiceListening ? 'text-emerald-400' : ''} />
                 </button>
-                <button type="button" className="wayda-icon-button" onClick={readLastAssistantMessage} title="Read response">
-                  <Volume2 size={15} />
+                <button
+                  type="button"
+                  className={`wayda-icon-button ${autoReadReplies ? 'wayda-icon-button-active' : ''}`}
+                  onClick={() => setAutoReadReplies((current) => !current)}
+                  onDoubleClick={readLastAssistantMessage}
+                  title={autoReadReplies ? 'Auto-read on (double-click to read now)' : 'Auto-read off (double-click to read now)'}
+                >
+                  <Volume2 size={18} />
                 </button>
-                <button type="submit" className="btn-primary" disabled={sending || !selectedConversation}>
+                <button type="submit" className="btn-primary wayda-send-button" disabled={sending || !selectedConversation || voiceTranscribing}>
                   {sending ? 'Sending...' : 'Send'}
                 </button>
               </div>

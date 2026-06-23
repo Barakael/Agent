@@ -95,3 +95,17 @@ class TradingDailyAnalysisResponseSchema(BaseModel):
     summary: str = Field(..., description="Narrative summary")
     reasons: List[str] = Field(default_factory=list)
     risks: List[str] = Field(default_factory=list)
+
+
+class VoiceTranscribeResponseSchema(BaseModel):
+    text: str = Field(..., description="Transcribed speech text")
+
+
+class VoiceSpeakRequestSchema(BaseModel):
+    text: str = Field(..., min_length=1, max_length=4096, description="Text to synthesize")
+
+
+class RunnerStatusSchema(BaseModel):
+    runner_enabled: bool = Field(..., description="Whether runner delegation is enabled")
+    online: bool = Field(..., description="Whether runner health check passed")
+    platform: Optional[str] = Field(None, description="Runner OS platform when online")

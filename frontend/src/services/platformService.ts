@@ -127,3 +127,14 @@ export async function fetchSystemHealth() {
   const response = await api.get<{ data: HealthSnapshot }>('/system/health')
   return response.data.data
 }
+
+export type RunnerStatus = {
+  runner_enabled: boolean
+  online: boolean
+  platform: string | null
+}
+
+export async function fetchRunnerStatus(): Promise<RunnerStatus> {
+  const response = await api.get<{ data: RunnerStatus }>('/runner/status')
+  return response.data.data
+}

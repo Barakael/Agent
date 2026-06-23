@@ -601,3 +601,54 @@ body.dark {
     font-size: 1.4rem;
   }
 }
+
+.wayda-chat-pane-head {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.35rem 0.75rem 0;
+}
+
+.wayda-runner-badge {
+  font-size: 0.72rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid #3f3f46;
+  color: #a1a1aa;
+}
+
+.wayda-runner-badge.online {
+  border-color: #166534;
+  color: #86efac;
+  background: #052e16;
+}
+
+.wayda-runner-badge.offline {
+  border-color: #7f1d1d;
+  color: #fca5a5;
+  background: #450a0a;
+}
+
+.wayda-messaging-mobile .wayda-mic-button,
+.wayda-messaging-mobile .wayda-send-button {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.wayda-messaging-mobile .wayda-composer textarea {
+  font-size: 1rem;
+  min-height: 44px;
+}
+
+@media (max-width: 1024px) {
+  .wayda-messaging-mobile.wayda-chat-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(120px, 28vh) 1fr;
+  }
+
+  .wayda-messaging-mobile .wayda-thread-pane {
+    display: flex;
+    border-right: 0;
+    border-bottom: 1px solid #3f3f46;
+    max-height: 28vh;
+  }
+}

@@ -1,8 +1,8 @@
 import logging
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from config import settings
@@ -11,6 +11,7 @@ from models.schemas import (
     ChatRequestSchema,
     ChatResponseSchema,
     HealthCheckSchema,
+    RunnerStatusSchema,
     TaskExecuteRequestSchema,
     TaskExecuteResponseSchema,
     TaskPlanRequestSchema,
@@ -19,9 +20,14 @@ from models.schemas import (
     ToolExecutionRequestSchema,
     ToolExecutionResponseSchema,
     TradingDailyAnalysisResponseSchema,
+    VoiceSpeakRequestSchema,
+    VoiceTranscribeResponseSchema,
 )
 from services.ai_service import AIService
+from services.runner_client import RunnerClient
 from services.trading_analysis import synthesize_daily_analysis
+from services.voice.stt import transcribe_audio
+from services.voice.tts import synthesize_speech
 
 logging.basicConfig(
     level=logging.INFO if settings.DEBUG else logging.WARNING,
@@ -225,6 +231,63 @@ async def fetch_trace(trace_id: str, auth: bool = Depends(validate_api_key)):
     if trace is None:
         raise HTTPException(status_code=404, detail="Trace not found")
     return {"data": trace}
+
+
+@app.post("/voice/transcribe", response_model=VoiceTranscribeResponseSchema)
+async def voice_transcribe(
+    audio: UploadFile = File(...),
+    auth: bool = Depends(validate_api_key),
+):
+    if not audio.content_type and not audio.filename:
+        raise HTTPException(status_code=400, detail="Audio file required")
+    try:
+        raw = await audio.read()
+        if not raw:
+            raise HTTPException(status_code=400, detail="Empty audio file")
+        filename = audio.filename or "recording.webm"
+        text = transcribe_audio(raw, filename=filename)
+        return VoiceTranscribeResponseSchema(text=text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Voice transcription failed")
+        raise HTTPException(status_code=502, detail="Transcription failed") from exc
+
+
+@app.post("/voice/speak")
+async def voice_speak(
+    request: VoiceSpeakRequestSchema,
+    auth: bool = Depends(validate_api_key),
+):
+    try:
+        audio_bytes = synthesize_speech(request.text)
+        return Response(content=audio_bytes, media_type="audio/mpeg")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Voice synthesis failed")
+        raise HTTPException(status_code=502, detail="Speech synthesis failed") from exc
+
+
+@app.get("/runner/status", response_model=RunnerStatusSchema)
+async def runner_status(auth: bool = Depends(validate_api_key)):
+    client = RunnerClient()
+    if not client.enabled:
+        return RunnerStatusSchema(runner_enabled=False, online=False, platform=None)
+    online = client.health()
+    platform = None
+    if online:
+        try:
+            import httpx
+
+            with httpx.Client(timeout=5.0) as http:
+                resp = http.get(f"{client.base_url}/health")
+                if resp.is_success:
+                    platform = resp.json().get("platform")
+        except Exception:
+            pass
+    return RunnerStatusSchema(runner_enabled=True, online=online, platform=platform)
+
 
 if __name__ == "__main__":
     import uvicorn

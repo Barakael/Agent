@@ -1,6 +1,8 @@
-# VPS deployment guide — see deploy/systemd/ and docker-compose.yml
+# VPS deployment
 
-## Quick start (Docker)
+**Wayda Messaging (PM2 @ `/var/www/messaging`):** see [messaging/README.md](messaging/README.md).
+
+## Quick start (Docker — local dev)
 
 ```bash
 cp trading-engine/.env.example trading-engine/.env

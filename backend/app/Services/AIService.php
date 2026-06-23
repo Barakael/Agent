@@ -148,4 +148,92 @@ class AIService
             return false;
         }
     }
+
+    /**
+     * Transcribe uploaded audio via ai-agent Whisper endpoint.
+     *
+     * @return string transcribed text
+     */
+    public function transcribeAudio(\Illuminate\Http\UploadedFile $file): string
+    {
+        $headers = ['Accept' => 'application/json'];
+        if (!empty($this->apiKey)) {
+            $headers['Authorization'] = "Bearer {$this->apiKey}";
+        }
+
+        $response = Http::withHeaders($headers)
+            ->timeout(60)
+            ->attach('audio', fopen($file->getRealPath(), 'r'), $file->getClientOriginalName())
+            ->post("{$this->aiServiceUrl}/voice/transcribe");
+
+        if (!$response->successful()) {
+            Log::error('Voice transcribe failed', [
+                'status' => $response->status(),
+                'body' => $response->body(),
+            ]);
+            throw new \Exception('Voice transcription failed');
+        }
+
+        $data = $response->json();
+        $text = $data['text'] ?? $data['data']['text'] ?? null;
+        if (!is_string($text) || $text === '') {
+            throw new \Exception('Invalid transcription response');
+        }
+
+        return $text;
+    }
+
+    /**
+     * Synthesize speech audio bytes from text.
+     */
+    public function speakText(string $text): string
+    {
+        $response = Http::withHeaders($this->getHeaders())
+            ->timeout(60)
+            ->post("{$this->aiServiceUrl}/voice/speak", [
+                'text' => $text,
+            ]);
+
+        if (!$response->successful()) {
+            Log::error('Voice speak failed', [
+                'status' => $response->status(),
+                'body' => $response->body(),
+            ]);
+            throw new \Exception('Speech synthesis failed');
+        }
+
+        return $response->body();
+    }
+
+    /**
+     * Local runner reachability from ai-agent.
+     *
+     * @return array{runner_enabled: bool, online: bool, platform: ?string}
+     */
+    public function runnerStatus(): array
+    {
+        try {
+            $response = Http::withHeaders($this->getHeaders())
+                ->timeout(10)
+                ->get("{$this->aiServiceUrl}/runner/status");
+
+            if (!$response->successful()) {
+                return [
+                    'runner_enabled' => false,
+                    'online' => false,
+                    'platform' => null,
+                ];
+            }
+
+            return $response->json();
+        } catch (\Exception $e) {
+            Log::warning('Runner status check failed', ['error' => $e->getMessage()]);
+
+            return [
+                'runner_enabled' => false,
+                'online' => false,
+                'platform' => null,
+            ];
+        }
+    }
 }

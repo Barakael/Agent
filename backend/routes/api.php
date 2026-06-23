@@ -7,8 +7,10 @@ use App\Http\Controllers\MessageController;
 use App\Http\Controllers\MemoryController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\PermissionController;
+use App\Http\Controllers\RunnerController;
 use App\Http\Controllers\SystemController;
 use App\Http\Controllers\TradingController;
+use App\Http\Controllers\VoiceController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -83,6 +85,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // System status
     Route::get('/system/health', [SystemController::class, 'health']);
+
+    Route::post('/voice/transcribe', [VoiceController::class, 'transcribe'])->middleware('throttle:high-cost-ai');
+    Route::post('/voice/speak', [VoiceController::class, 'speak'])->middleware('throttle:high-cost-ai');
+    Route::get('/runner/status', [RunnerController::class, 'status']);
 
     // Trading endpoints (proxied to trading-engine)
     Route::prefix('trading')->group(function () {

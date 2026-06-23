@@ -19,12 +19,12 @@ import {
 import { Link, NavLink } from 'react-router-dom'
 import { useState, type ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
+import { isMessagingMobile } from '../../config/messaging'
 import { useAuth } from '../../contexts/AuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
 import { useRealtime } from '../../contexts/RealtimeContext'
 
-const navigation = [
-  // { to: '/', label: 'Dashboard', icon: Gauge },
+const fullNavigation = [
   { to: '/chat', label: 'Chat', icon: MessageSquare },
   { to: '/tasks', label: 'Tasks', icon: ClipboardList },
   { to: '/trading', label: 'Trading', icon: TrendingUp },
@@ -36,6 +36,8 @@ const navigation = [
   { to: '/profile', label: 'Profile', icon: UserCircle2 },
   { to: '/status', label: 'System Status', icon: KeyRound },
 ]
+
+const messagingNavigation = [{ to: '/chat', label: 'Chat', icon: MessageSquare }]
 
 export default function AppShell({
   title,
@@ -50,24 +52,28 @@ export default function AppShell({
   const { theme, toggleTheme } = useTheme()
   const { connected } = useRealtime()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const navigation = isMessagingMobile ? messagingNavigation : fullNavigation
+  const homeLink = isMessagingMobile ? '/chat' : '/'
 
   return (
-    <div className="wayda-shell">
+    <div className={`wayda-shell ${isMessagingMobile ? 'wayda-messaging-mobile' : ''}`}>
       <aside className={`wayda-sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="wayda-sidebar-head">
-          <Link to="/" className="wayda-brand" onClick={() => setSidebarOpen(false)}>
+          <Link to={homeLink} className="wayda-brand" onClick={() => setSidebarOpen(false)}>
             <Bot size={16} />
-            <span>Wayda</span>
+            <span>{isMessagingMobile ? 'Wayda' : 'Wayda'}</span>
           </Link>
           <button type="button" className="wayda-icon-button lg:hidden" onClick={() => setSidebarOpen(false)} aria-label="Close sidebar">
             <X size={16} />
           </button>
         </div>
 
-        <button type="button" className="wayda-new-chat">
-          <MessageSquare size={15} />
-          <span>New chat</span>
-        </button>
+        {!isMessagingMobile ? (
+          <button type="button" className="wayda-new-chat">
+            <MessageSquare size={15} />
+            <span>New chat</span>
+          </button>
+        ) : null}
 
         <nav className="wayda-nav">
           {navigation.map((item) => (

@@ -66,11 +66,14 @@ class MessageController extends Controller
             'status' => 'completed',
         ]);
 
-        // Get conversation history for context
+        // Get conversation history for context (last 20 messages to limit latency)
         $conversationHistory = $conversation->messages()
             ->where('status', 'completed')
-            ->orderBy('created_at', 'asc')
+            ->orderBy('created_at', 'desc')
+            ->limit(20)
             ->get()
+            ->sortBy('created_at')
+            ->values()
             ->map(fn($msg) => [
                 'role' => $msg->role,
                 'content' => $msg->content,

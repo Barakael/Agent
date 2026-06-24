@@ -8,7 +8,10 @@ import sys
 import uuid
 from typing import Any, Dict, Optional
 
-from fastapi import Depends, FastAPI, HTTPException
+# Prevent re-delegation: runner executes tools locally on this machine.
+os.environ.setdefault("RUNNER_ENABLED", "false")
+
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -45,22 +48,30 @@ def validate_runner_key(
     return True
 
 
-@app.get("/health")
-async def health():
-    return {"status": "ok", "platform": sys.platform}
-
-
-@app.post("/runner/v1/jobs")
-async def create_job(body: RunToolRequest, auth: bool = Depends(validate_runner_key)):
-    job_id = str(uuid.uuid4())
-    jobs[job_id] = {"status": "running", "result": None, "error": None}
+def _run_job(job_id: str, body: RunToolRequest) -> None:
     try:
         result = executor.execute(body.tool, body.action, body.payload)
         jobs[job_id] = {"status": "completed", "result": result, "error": None}
     except Exception as exc:
         logger.exception("Tool execution failed")
         jobs[job_id] = {"status": "failed", "result": None, "error": str(exc)}
-    return {"job_id": job_id, "status": jobs[job_id]["status"]}
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "platform": sys.platform}
+
+
+@app.post("/runner/v1/jobs")
+async def create_job(
+    body: RunToolRequest,
+    background_tasks: BackgroundTasks,
+    auth: bool = Depends(validate_runner_key),
+):
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {"status": "running", "result": None, "error": None}
+    background_tasks.add_task(_run_job, job_id, body)
+    return {"job_id": job_id, "status": "running"}
 
 
 @app.get("/runner/v1/jobs/{job_id}")

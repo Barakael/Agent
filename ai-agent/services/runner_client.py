@@ -13,6 +13,12 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 
+def _runner_timeout_seconds() -> float:
+    if settings.RUNNER_TIMEOUT > 0:
+        return float(settings.RUNNER_TIMEOUT)
+    return float(max(settings.CURSOR_PROMPT_TIMEOUT, settings.BROWSER_TIMEOUT + 90) + 30)
+
+
 class RunnerClient:
     """HTTP client for the co-located or remote local runner daemon."""
 
@@ -20,11 +26,11 @@ class RunnerClient:
         self,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
-        timeout: float = 60.0,
+        timeout: Optional[float] = None,
     ) -> None:
         self.base_url = (base_url or settings.RUNNER_URL).rstrip("/")
         self.api_key = api_key or settings.RUNNER_API_KEY
-        self.timeout = timeout
+        self.timeout = timeout if timeout is not None else _runner_timeout_seconds()
         self.enabled = settings.RUNNER_ENABLED
 
     def _headers(self) -> dict:
@@ -58,15 +64,21 @@ class RunnerClient:
                     "payload": payload,
                     "task_id": task_id,
                 },
+                timeout=30.0,
             )
             resp.raise_for_status()
             job = resp.json()
             job_id = job["job_id"]
 
-            for _ in range(30):
+            poll_interval = 0.5
+            max_polls = int(self.timeout / poll_interval) + 1
+            poll_timeout = min(10.0, self.timeout)
+
+            for _ in range(max_polls):
                 poll = client.get(
                     f"{self.base_url}/runner/v1/jobs/{job_id}",
                     headers=self._headers(),
+                    timeout=poll_timeout,
                 )
                 poll.raise_for_status()
                 data = poll.json()
@@ -74,7 +86,7 @@ class RunnerClient:
                     if data["status"] == "failed":
                         raise RuntimeError(data.get("error", "Runner job failed"))
                     return data["result"]
-                time.sleep(0.5)
+                time.sleep(poll_interval)
 
         raise TimeoutError("Local runner job timed out")
 

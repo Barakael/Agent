@@ -19,7 +19,10 @@ class AIService:
             logger.error("OPENAI_API_KEY not configured")
             raise ValueError("OPENAI_API_KEY environment variable is required")
 
-        client_kwargs: Dict[str, Any] = {"api_key": settings.OPENAI_API_KEY}
+        client_kwargs: Dict[str, Any] = {
+            "api_key": settings.OPENAI_API_KEY,
+            "timeout": float(settings.TIMEOUT),
+        }
         if settings.OPENAI_BASE_URL.strip():
             client_kwargs["base_url"] = settings.OPENAI_BASE_URL.rstrip("/")
             logger.info("LLM endpoint: %s (self-hosted)", client_kwargs["base_url"])

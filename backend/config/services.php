@@ -39,7 +39,7 @@ return [
         'url' => env('AI_SERVICE_URL', 'http://localhost:8001'),
         'api_key' => env('AI_SERVICE_API_KEY', ''),
         'tool_approval_token' => env('AI_TOOL_APPROVAL_TOKEN', ''),
-        'timeout' => env('AI_SERVICE_TIMEOUT', 30),
+        'timeout' => env('AI_SERVICE_TIMEOUT', 120),
     ],
 
     'trading' => [

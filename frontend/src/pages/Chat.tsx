@@ -14,7 +14,7 @@ import {
   type MessagePayload,
 } from '../services/conversationService'
 import { fetchRunnerStatus, type RunnerStatus } from '../services/platformService'
-import { playAudioBlob, speakText, transcribeAudio } from '../services/voiceService'
+import { playAudioBlob, speakText, transcribeAudio, unlockAudio, AudioPlaybackError, speakWithBrowserTts } from '../services/voiceService'
 import { useRealtime } from '../contexts/RealtimeContext'
 
 export default function ChatPage() {
@@ -33,11 +33,16 @@ export default function ChatPage() {
   const [autoReadReplies, setAutoReadReplies] = useState(isMessagingMobile)
   const [runnerStatus, setRunnerStatus] = useState<RunnerStatus | null>(null)
   const [voiceHint, setVoiceHint] = useState<string | null>(null)
+  const [pendingSpeechText, setPendingSpeechText] = useState<string | null>(null)
+  const [sendElapsed, setSendElapsed] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const recognitionRef = useRef<SpeechRecognition | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const mediaStreamRef = useRef<MediaStream | null>(null)
   const recordChunksRef = useRef<Blob[]>([])
+  const recordingStartingRef = useRef(false)
+  const touchHandledRef = useRef(false)
 
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
     messagesEndRef.current?.scrollIntoView({ behavior, block: 'end' })
@@ -99,8 +104,21 @@ export default function ChatPage() {
     return () => {
       recognitionRef.current?.stop()
       mediaRecorderRef.current?.stop()
+      mediaStreamRef.current?.getTracks().forEach((track) => track.stop())
     }
   }, [])
+
+  useEffect(() => {
+    if (!sending) {
+      setSendElapsed(0)
+      return
+    }
+    const started = Date.now()
+    const timer = window.setInterval(() => {
+      setSendElapsed(Math.floor((Date.now() - started) / 1000))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [sending])
 
   useEffect(() => {
     const loadRunner = async () => {
@@ -172,19 +190,41 @@ export default function ChatPage() {
     }
   }
 
+  const pickRecordingMime = (): string | undefined => {
+    const candidates = ['audio/webm', 'audio/mp4', 'audio/mp4;codecs=mp4a.40.2', 'audio/aac']
+    for (const candidate of candidates) {
+      if (MediaRecorder.isTypeSupported(candidate)) {
+        return candidate
+      }
+    }
+    return undefined
+  }
+
   const speakAssistantText = async (text: string) => {
+    setPendingSpeechText(null)
     try {
       const blob = await speakText(text)
-      playAudioBlob(blob)
-    } catch {
-      const utterance = new SpeechSynthesisUtterance(text)
-      window.speechSynthesis.speak(utterance)
+      await playAudioBlob(blob)
+    } catch (err) {
+      if (err instanceof AudioPlaybackError) {
+        setPendingSpeechText(text)
+        setVoiceHint('Tap the speaker icon to hear the reply.')
+        return
+      }
+      speakWithBrowserTts(text)
     }
+  }
+
+  const handleTapToHear = () => {
+    if (!pendingSpeechText) return
+    void unlockAudio()
+    void speakAssistantText(pendingSpeechText)
   }
 
   const submitMessage = async (text: string) => {
     if (!selectedConversation || !text.trim()) return
 
+    void unlockAudio()
     setSending(true)
     setAssistantTyping(true)
     try {
@@ -223,8 +263,12 @@ export default function ChatPage() {
   }
 
   const stopServerRecording = async () => {
+    if (recordingStartingRef.current) {
+      return
+    }
     const recorder = mediaRecorderRef.current
     if (!recorder || recorder.state === 'inactive') {
+      setVoiceRecording(false)
       return
     }
     setVoiceRecording(false)
@@ -232,7 +276,15 @@ export default function ChatPage() {
     setVoiceHint('Transcribing…')
 
     await new Promise<void>((resolve) => {
-      recorder.onstop = () => resolve()
+      const stream = mediaStreamRef.current
+      recorder.onstop = () => {
+        stream?.getTracks().forEach((track) => track.stop())
+        mediaStreamRef.current = null
+        resolve()
+      }
+      if (recorder.state === 'recording') {
+        recorder.requestData()
+      }
       recorder.stop()
     })
 
@@ -261,31 +313,44 @@ export default function ChatPage() {
   }
 
   const startServerRecording = async () => {
-    if (voiceRecording || voiceTranscribing || sending) return
+    if (voiceRecording || voiceTranscribing || sending || recordingStartingRef.current) return
+    recordingStartingRef.current = true
+    void unlockAudio()
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4'
-      const recorder = new MediaRecorder(stream, { mimeType: mime })
+      mediaStreamRef.current = stream
+      const mime = pickRecordingMime()
+      const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream)
       recordChunksRef.current = []
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           recordChunksRef.current.push(event.data)
         }
       }
-      recorder.onstop = () => {
-        stream.getTracks().forEach((track) => track.stop())
-      }
       mediaRecorderRef.current = recorder
-      recorder.start()
+      recorder.start(250)
       setVoiceRecording(true)
       setVoiceHint('Recording… release to send')
       setError(null)
     } catch {
-      setError('Microphone access denied or unavailable.')
+      mediaStreamRef.current?.getTracks().forEach((track) => track.stop())
+      mediaStreamRef.current = null
+      const secure = window.isSecureContext
+      setError(
+        secure
+          ? 'Microphone access denied. Allow mic for this site in Settings.'
+          : 'Voice needs HTTPS on iPhone. Use http://147.79.101.245:3010 or allow mic in browser settings.',
+      )
+    } finally {
+      recordingStartingRef.current = false
     }
   }
 
   const toggleVoiceInput = () => {
+    if (touchHandledRef.current) {
+      touchHandledRef.current = false
+      return
+    }
     if (typeof MediaRecorder !== 'undefined' && typeof navigator.mediaDevices?.getUserMedia === 'function') {
       if (voiceRecording) {
         void stopServerRecording()
@@ -303,7 +368,7 @@ export default function ChatPage() {
 
     const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition
     if (!SpeechRecognitionCtor) {
-      setError('Voice input requires Chrome or Edge. Safari/Firefox are not supported.')
+      setError('Voice needs HTTPS and microphone permission on iPhone Safari.')
       return
     }
 
@@ -447,7 +512,9 @@ export default function ChatPage() {
               <article className="wayda-message-row assistant">
                 <div className="wayda-message-inner typing">
                   <span className="dot" />
-                  <span>Wayda is typing...</span>
+                  <span>
+                    Wayda is working…{sendElapsed > 0 ? ` (${sendElapsed}s)` : ''}
+                  </span>
                 </div>
               </article>
             ) : null}
@@ -461,6 +528,11 @@ export default function ChatPage() {
             {voiceListening ? <p className="wayda-voice-status">Listening… speak now (click mic to stop)</p> : null}
             {!voiceRecording && !voiceTranscribing && !voiceListening && voiceHint ? (
               <p className="wayda-voice-status">{voiceHint}</p>
+            ) : null}
+            {pendingSpeechText ? (
+              <button type="button" className="wayda-ghost-button" onClick={handleTapToHear}>
+                Tap to hear reply
+              </button>
             ) : null}
             <form onSubmit={handleSendMessage} className="wayda-composer">
               <textarea
@@ -476,14 +548,16 @@ export default function ChatPage() {
                   className={`wayda-icon-button wayda-mic-button ${voiceRecording || voiceListening ? 'wayda-icon-button-active' : ''}`}
                   onClick={toggleVoiceInput}
                   onPointerDown={(event) => {
-                    if (event.pointerType === 'touch' && !voiceRecording) {
+                    if (event.pointerType === 'touch' && !voiceRecording && !recordingStartingRef.current) {
                       event.preventDefault()
+                      touchHandledRef.current = true
                       void startServerRecording()
                     }
                   }}
                   onPointerUp={(event) => {
                     if (event.pointerType === 'touch' && voiceRecording) {
                       event.preventDefault()
+                      touchHandledRef.current = true
                       void stopServerRecording()
                     }
                   }}
@@ -494,15 +568,22 @@ export default function ChatPage() {
                 </button>
                 <button
                   type="button"
-                  className={`wayda-icon-button ${autoReadReplies ? 'wayda-icon-button-active' : ''}`}
-                  onClick={() => setAutoReadReplies((current) => !current)}
+                  className={`wayda-icon-button ${autoReadReplies || pendingSpeechText ? 'wayda-icon-button-active' : ''}`}
+                  onClick={() => {
+                    void unlockAudio()
+                    if (pendingSpeechText) {
+                      handleTapToHear()
+                      return
+                    }
+                    setAutoReadReplies((current) => !current)
+                  }}
                   onDoubleClick={readLastAssistantMessage}
                   title={autoReadReplies ? 'Auto-read on (double-click to read now)' : 'Auto-read off (double-click to read now)'}
                 >
                   <Volume2 size={18} />
                 </button>
                 <button type="submit" className="btn-primary wayda-send-button" disabled={sending || !selectedConversation || voiceTranscribing}>
-                  {sending ? 'Sending...' : 'Send'}
+                  {sending ? `Working…${sendElapsed > 0 ? ` ${sendElapsed}s` : ''}` : 'Send'}
                 </button>
               </div>
             </form>

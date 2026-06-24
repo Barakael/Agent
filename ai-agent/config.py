@@ -70,6 +70,7 @@ class Settings(BaseSettings):
     RUNNER_ENABLED: bool = os.getenv("RUNNER_ENABLED", "false").lower() == "true"
     RUNNER_URL: str = os.getenv("RUNNER_URL", "http://127.0.0.1:8010")
     RUNNER_API_KEY: str = os.getenv("RUNNER_API_KEY", "local-runner-dev-key")
+    RUNNER_TIMEOUT: int = int(os.getenv("RUNNER_TIMEOUT", "0"))
 
     # Trading engine supervision
     TRADING_ENGINE_URL: str = os.getenv("TRADING_ENGINE_URL", "http://localhost:8002")

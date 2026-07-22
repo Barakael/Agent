@@ -103,9 +103,14 @@ class AnalysisEngine:
             return True, f"{reason} (pair {symbol})" if symbol else reason
         return False, ""
 
-    async def run_preflight(self, client=None) -> AnalysisSnapshot:
+    async def run_preflight(
+        self,
+        client=None,
+        symbols: list[str] | None = None,
+    ) -> AnalysisSnapshot:
         reasons: list[str] = []
         sources: dict[str, Any] = {}
+        pairs = symbols or settings.pairs_list
 
         await self.calendar.refresh()
         sources["news_events_loaded"] = len(self.calendar._events)
@@ -113,6 +118,7 @@ class AnalysisEngine:
             {"title": e.title, "currency": e.currency, "time": e.event_time.isoformat()}
             for e in self.calendar.upcoming_high_impact(24)
         ]
+        sources["preflight_pairs"] = pairs
 
         metrics = compute_metrics()
         sources["metrics"] = metrics
@@ -122,7 +128,7 @@ class AnalysisEngine:
         runner = BacktestRunner()
         if client and settings.DERIV_API_TOKEN:
             backtest = {}
-            for symbol in settings.pairs_list:
+            for symbol in pairs:
                 try:
                     candles = await client.get_candles_history(
                         symbol,
@@ -135,6 +141,7 @@ class AnalysisEngine:
                     backtest[symbol] = {"error": str(exc), "passed": False}
         else:
             backtest = await runner.run_all_pairs()
+            backtest = {s: backtest[s] for s in pairs if s in backtest}
 
         sources["backtest"] = backtest
         for symbol, result in backtest.items():

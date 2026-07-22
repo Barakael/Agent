@@ -195,8 +195,11 @@ async def main() -> int:
     await client.connect()
     try:
         await client.authorize()
+        if client.market_data_only or not client._authorized:
+            print("FAIL — could not authorize for trading (OTP/token). Check PAT + App ID.")
+            return 1
         if not client.is_demo:
-            print("FAIL — not demo")
+            print(f"FAIL — not demo (loginid={client.loginid})")
             return 1
         signal = await live_signal(client, symbol)
         chosen = symbol

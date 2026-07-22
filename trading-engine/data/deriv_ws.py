@@ -137,12 +137,16 @@ class DerivWebSocketClient:
         if not account_id:
             raise RuntimeError("No Deriv account found for OTP auth")
 
-        otp_url = await get_otp_websocket_url(account_id)
-        logger.info("Deriv OTP WebSocket URL obtained for account %s", account_id)
-
         last_exc: Exception | None = None
         for attempt in range(1, 4):
             try:
+                # OTP WebSocket URLs are typically single-use — refresh every attempt
+                otp_url = await get_otp_websocket_url(account_id)
+                logger.info(
+                    "Deriv OTP WebSocket URL obtained for account %s (attempt %s)",
+                    account_id,
+                    attempt,
+                )
                 await self._reconnect(otp_url)
                 last_exc = None
                 break
@@ -159,7 +163,7 @@ class DerivWebSocketClient:
             raise last_exc
 
         self._authorized = True
-        self._is_demo = "demo" in otp_url.lower()
+        self._is_demo = "demo" in (self.ws_url or "").lower() or account_id.startswith(("DOT", "VRTC", "VRW", "VRT"))
         self._loginid = account_id
         self._market_data_only = False
 

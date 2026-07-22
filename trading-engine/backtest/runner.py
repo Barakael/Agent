@@ -59,6 +59,8 @@ class BacktestRunner:
         balance = self.initial_balance
         equity_curve = [balance]
         open_trade: BacktestTrade | None = None
+        # Fresh risk session per symbol so one pair cannot kill the whole run
+        self.risk_gate.reset_session(balance)
 
         min_bars = settings.MACD_SLOW + settings.MACD_SIGNAL + settings.RSI_PERIOD + 2
 
@@ -69,23 +71,27 @@ class BacktestRunner:
             price = float(bar["close"])
 
             if open_trade:
+                sl_dist = settings.DEFAULT_SL_PIPS * (
+                    0.01 if "JPY" in symbol else 0.0001
+                )
+                tp_dist = settings.DEFAULT_TP_PIPS * (
+                    0.01 if "JPY" in symbol else 0.0001
+                )
                 sl_hit = (
-                    open_trade.direction == "buy" and price <= open_trade.entry_price - settings.DEFAULT_SL_PIPS * 0.0001
+                    open_trade.direction == "buy" and price <= open_trade.entry_price - sl_dist
                 ) or (
-                    open_trade.direction == "sell" and price >= open_trade.entry_price + settings.DEFAULT_SL_PIPS * 0.0001
+                    open_trade.direction == "sell" and price >= open_trade.entry_price + sl_dist
                 )
                 tp_hit = (
-                    open_trade.direction == "buy" and price >= open_trade.entry_price + settings.DEFAULT_TP_PIPS * 0.0001
+                    open_trade.direction == "buy" and price >= open_trade.entry_price + tp_dist
                 ) or (
-                    open_trade.direction == "sell" and price <= open_trade.entry_price - settings.DEFAULT_TP_PIPS * 0.0001
+                    open_trade.direction == "sell" and price <= open_trade.entry_price - tp_dist
                 )
                 if sl_hit or tp_hit:
-                    exit_price = price
-                    if open_trade.direction == "buy":
-                        pnl = (exit_price - open_trade.entry_price) * open_trade.stake * 10000
-                    else:
-                        pnl = (open_trade.entry_price - exit_price) * open_trade.stake * 10000
-                    open_trade.exit_price = exit_price
+                    # Dollars risked = stake; TP pays R-multiple, SL loses stake
+                    rr = settings.DEFAULT_TP_PIPS / max(1, settings.DEFAULT_SL_PIPS)
+                    pnl = open_trade.stake * rr if tp_hit else -open_trade.stake
+                    open_trade.exit_price = price
                     open_trade.pnl = pnl
                     balance += pnl
                     self.risk_gate.record_pnl(pnl)
@@ -96,13 +102,17 @@ class BacktestRunner:
             if signal and open_trade is None and not self.risk_gate.kill_switch_active:
                 risk = self.risk_gate.evaluate(signal, balance)
                 if risk.decision.value == "approved":
+                    # Use risk dollars (1.5% of balance), not the FX lot-size formula
+                    dollars_risked = max(
+                        1.0, round(balance * (settings.RISK_PERCENT_PER_TRADE / 100.0), 2)
+                    )
                     open_trade = BacktestTrade(
                         symbol=symbol,
                         direction=signal.direction.value,
                         entry_price=price,
                         exit_price=0.0,
                         pnl=0.0,
-                        stake=risk.stake,
+                        stake=dollars_risked,
                     )
 
         if result.trades:
@@ -122,11 +132,14 @@ class BacktestRunner:
         return result
 
     async def run_live_history(self, symbol: str, count: int = 500) -> BacktestResult:
-        client = DerivWebSocketClient()
+        """Fetch candles over public legacy WS (no auth required for history)."""
+        client = DerivWebSocketClient(
+            app_id="1089",
+            api_token="",
+            ws_url="wss://ws.derivws.com/websockets/v3?app_id=1089",
+        )
         await client.connect()
         try:
-            if settings.DERIV_API_TOKEN:
-                await client.authorize()
             candles = await client.get_candles_history(
                 symbol, settings.granularity_seconds, count
             )
@@ -135,11 +148,25 @@ class BacktestRunner:
         finally:
             await client.disconnect()
 
-    async def run_all_pairs(self) -> dict:
+    async def run_all_pairs(self, count: int = 500) -> dict:
+        """One public WS for all pairs — avoids OTP reconnect storms."""
         results = {}
-        for symbol in settings.pairs_list:
-            try:
-                results[symbol] = (await self.run_live_history(symbol)).to_dict()
-            except Exception as exc:
-                results[symbol] = {"error": str(exc)}
+        client = DerivWebSocketClient(
+            app_id="1089",
+            api_token="",
+            ws_url="wss://ws.derivws.com/websockets/v3?app_id=1089",
+        )
+        await client.connect()
+        try:
+            for symbol in settings.pairs_list:
+                try:
+                    candles = await client.get_candles_history(
+                        symbol, settings.granularity_seconds, count
+                    )
+                    df = pd.DataFrame(candles)
+                    results[symbol] = self.run_on_dataframe(symbol, df).to_dict()
+                except Exception as exc:
+                    results[symbol] = {"error": str(exc)}
+        finally:
+            await client.disconnect()
         return results

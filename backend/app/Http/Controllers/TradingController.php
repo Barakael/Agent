@@ -194,4 +194,42 @@ class TradingController extends Controller
     {
         return response()->json($this->trading->backtest());
     }
+
+    public function activePlan(Request $request)
+    {
+        try {
+            return response()->json($this->trading->getActivePlan());
+        } catch (\Exception $e) {
+            return response()->json(['data' => null, 'stored' => null, 'active_for_today' => false]);
+        }
+    }
+
+    public function reviews(Request $request)
+    {
+        $dir = base_path('../trading-engine/reports/reviews');
+        $items = [];
+        if (is_dir($dir)) {
+            $files = collect(scandir($dir) ?: [])
+                ->filter(fn ($f) => str_starts_with($f, 'review_') && str_ends_with($f, '.md'))
+                ->sortDesc()
+                ->take(14);
+            foreach ($files as $file) {
+                $path = $dir.'/'.$file;
+                $items[] = [
+                    'file' => $file,
+                    'date' => preg_match('/review_(\d{4}-\d{2}-\d{2})\.md/', $file, $m) ? $m[1] : null,
+                    'content' => file_get_contents($path) ?: '',
+                ];
+            }
+        }
+
+        $decision = TradingAnalysisDecision::query()->latest()->first();
+
+        return response()->json([
+            'data' => [
+                'reviews' => $items,
+                'latest_ai_decision' => $decision,
+            ],
+        ]);
+    }
 }

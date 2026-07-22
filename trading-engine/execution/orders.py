@@ -21,7 +21,8 @@ class OrderExecutor:
         self.mode = settings.TRADING_MODE
 
     def _contract_type(self, direction: SignalDirection) -> str:
-        return "CALL" if direction == SignalDirection.BUY else "PUT"
+        # Multipliers can be sold early; binary CALL/PUT often cannot.
+        return "MULTUP" if direction == SignalDirection.BUY else "MULTDOWN"
 
     async def execute_signal(
         self,
@@ -47,7 +48,7 @@ class OrderExecutor:
             }
 
         contract_type = self._contract_type(signal.direction)
-        duration = settings.CANDLE_TIMEFRAME_MINUTES * 3  # intraday contracts
+        duration = settings.CANDLE_TIMEFRAME_MINUTES * 3  # unused for multipliers
 
         result = await self.client.buy_contract(
             symbol=signal.symbol,
@@ -57,6 +58,7 @@ class OrderExecutor:
             duration_unit="m",
             stop_loss=risk.stop_loss_price,
             take_profit=risk.take_profit_price,
+            multiplier=100,
         )
         logger.info("Order placed %s %s contract_id=%s", signal.symbol, contract_type, result.get("contract_id"))
         return result
@@ -79,7 +81,7 @@ class OrderExecutor:
                 "take_profit": take_profit,
             }
 
-        contract_type = "CALL" if direction.lower() == "buy" else "PUT"
+        contract_type = "MULTUP" if direction.lower() == "buy" else "MULTDOWN"
         duration = settings.CANDLE_TIMEFRAME_MINUTES * 3
         return await self.client.buy_contract(
             symbol=symbol,
@@ -89,4 +91,5 @@ class OrderExecutor:
             duration_unit="m",
             stop_loss=stop_loss,
             take_profit=take_profit,
+            multiplier=100,
         )

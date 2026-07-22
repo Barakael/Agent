@@ -302,24 +302,35 @@ class DerivWebSocketClient:
         basis: str = "stake",
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None,
+        multiplier: Optional[float] = None,
     ) -> dict:
-        """Place a contract via proposal + buy flow."""
+        """Place a contract via proposal + buy flow.
+
+        New Options WebSocket schema uses ``underlying_symbol`` (legacy ``symbol``
+        is rejected with InputValidationFailed). Multiplier contracts omit duration
+        and support early ``sell``; binary CALL/PUT often cannot be resold.
+        """
         proposal_payload: Dict[str, Any] = {
             "proposal": 1,
             "amount": amount,
             "basis": basis,
             "contract_type": contract_type,
             "currency": "USD",
-            "duration": duration,
-            "duration_unit": duration_unit,
-            "symbol": symbol,
+            "underlying_symbol": symbol,
         }
-        if stop_loss is not None:
-            proposal_payload["limit_order"] = proposal_payload.get("limit_order", {})
-            proposal_payload["limit_order"]["stop_loss"] = stop_loss
-        if take_profit is not None:
-            proposal_payload["limit_order"] = proposal_payload.get("limit_order", {})
-            proposal_payload["limit_order"]["take_profit"] = take_profit
+        is_multiplier = contract_type in {"MULTUP", "MULTDOWN"} or multiplier is not None
+        if is_multiplier:
+            proposal_payload["multiplier"] = float(multiplier or 100)
+        else:
+            proposal_payload["duration"] = duration
+            proposal_payload["duration_unit"] = duration_unit
+
+        # limit_order is only valid for multipliers / accumulators on the new API
+        if contract_type in {"MULTUP", "MULTDOWN", "ACCU"}:
+            if stop_loss is not None:
+                proposal_payload.setdefault("limit_order", {})["stop_loss"] = stop_loss
+            if take_profit is not None:
+                proposal_payload.setdefault("limit_order", {})["take_profit"] = take_profit
 
         proposal_resp = await self._send(proposal_payload)
         if "error" in proposal_resp:

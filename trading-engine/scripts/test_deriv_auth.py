@@ -18,7 +18,7 @@ async def main() -> int:
         print("Set DERIV_API_TOKEN in .env")
         return 1
 
-    # 1. REST accounts
+    # 1. REST accounts (required for PAT OTP trading)
     print("1. REST GET /options/accounts")
     try:
         from data.deriv_rest import list_accounts
@@ -29,6 +29,11 @@ async def main() -> int:
             print(f"   - {a}")
     except Exception as e:
         print(f"   FAIL — {e}")
+        if str(settings.DERIV_API_TOKEN).startswith("pat_"):
+            print(
+                "   NOTE: PAT trading requires a valid DERIV_APP_ID for the issuing app. "
+                "'Invalid application' means the UUID/Client ID does not match."
+            )
 
     # 2. Full client authorize (OTP → legacy → fallback)
     print("\n2. WebSocket authorize (OTP + legacy)")
@@ -40,6 +45,12 @@ async def main() -> int:
         auth = await client.authorize()
         if client.market_data_only:
             print("   PARTIAL — public market data only (token not fully active)")
+            candles = await client.get_candles_history(
+                settings.pairs_list[0], settings.granularity_seconds, 3
+            )
+            print(f"   Candles OK — {settings.pairs_list[0]} last close={candles[-1]['close']}")
+            print("\n=== Auth insufficient for trading ===")
+            return 1
         elif auth:
             print(f"   OK — loginid={client.loginid} demo={client.is_demo} balance={client.balance}")
         candles = await client.get_candles_history(

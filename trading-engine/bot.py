@@ -16,6 +16,8 @@ from data.deriv_ws import DerivWebSocketClient
 from execution.orders import OrderExecutor
 from execution.positions import PositionManager
 from journal.writer import JournalWriter
+from plan.store import plan_store
+from plan.schema import DailyPlan
 from risk.gate import RiskDecision, RiskGate
 from risk.session import SessionManager
 from signals.engine import SignalEngine
@@ -49,6 +51,23 @@ class TradingBot:
         self._task: Optional[asyncio.Task] = None
         self._account_probed = False
         self._account_probe_error: Optional[str] = None
+        self.plan_store = plan_store
+
+    def get_active_plan(self) -> Optional[DailyPlan]:
+        plan = self.plan_store.load()
+        if plan and plan.is_active_for_today():
+            return plan
+        return None
+
+    @property
+    def active_pairs(self) -> list[str]:
+        plan = self.get_active_plan()
+        if plan:
+            return list(plan.pairs)
+        return settings.pairs_list
+
+    def set_active_plan(self, raw: dict) -> DailyPlan:
+        return self.plan_store.save_dict(raw)
 
     @property
     def analysis_armed(self) -> bool:
@@ -100,6 +119,10 @@ class TradingBot:
         if self._paused or not self._running:
             return
 
+        plan = self.get_active_plan()
+        if plan and symbol not in plan.pairs:
+            return
+
         if self.session.must_force_close():
             await self._close_all_positions(force=True)
             return
@@ -110,11 +133,22 @@ class TradingBot:
             return
 
         news_paused, news_reason = self.calendar.is_trading_paused()
+        sl_pips = plan.sl_pips if plan else None
+        tp_pips = plan.tp_pips if plan else None
+        max_stake = plan.max_stake_usd if plan else None
+        if plan:
+            self.risk.risk_percent = plan.risk_percent
+        else:
+            self.risk.risk_percent = settings.RISK_PERCENT_PER_TRADE
+
         risk_result = self.risk.evaluate(
             signal,
             self.client.balance,
             trading_paused=self._paused,
             news_paused=news_paused,
+            sl_pips=sl_pips,
+            tp_pips=tp_pips,
+            max_stake_usd=max_stake,
         )
         self.journal.log_signal(signal, risk_result)
 
@@ -186,17 +220,20 @@ class TradingBot:
                 await self.client.disconnect()
 
     async def run_preflight(self) -> dict:
+        pairs = self.active_pairs
         client = self.client if self._running and self.client._ws else None
         if not client and settings.DERIV_API_TOKEN:
             await self.client.connect()
             try:
                 await self.client.authorize()
-                snapshot = await self.analysis.run_preflight(client=self.client)
+                snapshot = await self.analysis.run_preflight(
+                    client=self.client, symbols=pairs
+                )
             finally:
                 if not self._running:
                     await self.client.disconnect()
             return snapshot.to_dict()
-        snapshot = await self.analysis.run_preflight(client=client)
+        snapshot = await self.analysis.run_preflight(client=client, symbols=pairs)
         return snapshot.to_dict()
 
     async def start(self) -> None:
@@ -242,7 +279,7 @@ class TradingBot:
             logger.exception("Preflight failed on start — bot will not arm")
 
         if deriv_connected or market_data_only or self.client._ws is not None:
-            for symbol in settings.pairs_list:
+            for symbol in self.active_pairs:
                 try:
                     history = await self.client.get_candles_history(
                         symbol, settings.granularity_seconds, settings.CANDLE_BUFFER_SIZE
@@ -262,7 +299,7 @@ class TradingBot:
             settings.TRADING_MODE,
             self.analysis_armed,
             deriv_connected,
-            settings.pairs_list,
+            self.active_pairs,
         )
 
     @staticmethod
@@ -295,10 +332,12 @@ class TradingBot:
     def status(self) -> dict:
         bot_state = self.journal.get_bot_state()
         preflight = self.analysis.last_preflight or self.journal.get_latest_preflight()
+        plan = self.get_active_plan()
+        stored = self.plan_store.load()
         return {
             "state": self.state,
             "mode": settings.TRADING_MODE,
-            "pairs": settings.pairs_list,
+            "pairs": self.active_pairs,
             "daily_pnl": self.risk.daily_pnl,
             "kill_switch_active": self.risk.kill_switch_active,
             "balance": self.client.balance,
@@ -311,4 +350,6 @@ class TradingBot:
             "sources": self.analysis.source_status(),
             "session": self.session.session_status(),
             "last_heartbeat": bot_state.get("last_heartbeat"),
+            "active_plan": plan.to_dict() if plan else None,
+            "stored_plan": stored.to_dict() if stored else None,
         }

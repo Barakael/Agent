@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     TRAILING_STOP_ENABLED: bool = os.getenv("TRAILING_STOP_ENABLED", "false").lower() == "true"
     TRAILING_STOP_PIPS: int = int(os.getenv("TRAILING_STOP_PIPS", "10"))
 
+    # Daily plan clamps (automation callback)
+    PLAN_RISK_PERCENT_MAX: float = float(os.getenv("PLAN_RISK_PERCENT_MAX", "2.0"))
+    PLAN_MAX_STAKE_USD_CEILING: float = float(os.getenv("PLAN_MAX_STAKE_USD_CEILING", "50"))
+
     # Session — force close all positions before this time (UTC)
     SESSION_CLOSE_HOUR_UTC: int = int(os.getenv("SESSION_CLOSE_HOUR_UTC", "21"))
     SESSION_CLOSE_MINUTE_UTC: int = int(os.getenv("SESSION_CLOSE_MINUTE_UTC", "0"))

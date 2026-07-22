@@ -114,3 +114,19 @@ If Deriv setup remains blocked, consider:
 | **Deriv (stay)** | You already have demo account, our bot built | New API migration pain |
 
 Staying on Deriv is viable once the token is active — our engine now supports the official OTP flow.
+
+---
+
+## Daily plan + Cursor Automations
+
+See **[docs/CURSOR_TRADING_AUTOMATION.md](../docs/CURSOR_TRADING_AUTOMATION.md)** for:
+
+- HMAC webhook endpoints (`/api/webhooks/trading/daily-plan`)
+- Plan JSON schema and clamps
+- Example signed `curl`
+- Cursor Automation prompt contract
+
+Engine endpoints (internal Bearer `TRADING_SERVICE_API_KEY`):
+
+- `GET /plan/active`
+- `PUT /plan/active`

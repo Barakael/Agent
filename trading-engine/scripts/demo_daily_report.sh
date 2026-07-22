@@ -18,12 +18,14 @@ fi
 
 status=$(curl -sf "${AUTH_HEADER[@]}" "$TRADING_URL/status" || echo '{"state":"unreachable"}')
 metrics=$(curl -sf "${AUTH_HEADER[@]}" "$TRADING_URL/metrics" || echo '{}')
+plan=$(curl -sf "${AUTH_HEADER[@]}" "$TRADING_URL/plan/active" || echo '{"data":null}')
 
 cat > "$REPORT_DIR/daily_${DATE}.json" <<EOF
 {
   "date": "$DATE",
   "status": $status,
   "metrics": $metrics,
+  "active_plan": $plan,
   "note": "Compare total_pnl and win_rate against backtest baseline from POST /backtest"
 }
 EOF

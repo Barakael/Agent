@@ -132,6 +132,7 @@ class RiskGate:
         news_paused: bool = False,
         sl_pips: Optional[int] = None,
         tp_pips: Optional[int] = None,
+        max_stake_usd: Optional[float] = None,
     ) -> RiskCheckResult:
         if self._kill_switch_active:
             return RiskCheckResult(
@@ -169,6 +170,8 @@ class RiskGate:
                 decision=RiskDecision.REJECTED,
                 reason="Stake calculation failed",
             )
+        if max_stake_usd is not None and max_stake_usd > 0:
+            stake = min(stake, float(max_stake_usd))
 
         return RiskCheckResult(
             decision=RiskDecision.APPROVED,

@@ -48,6 +48,10 @@ return [
         'timeout' => env('TRADING_SERVICE_TIMEOUT', 30),
     ],
 
+    'automation' => [
+        'webhook_secret' => env('AUTOMATION_WEBHOOK_SECRET', ''),
+    ],
+
     'realtime' => [
         'transport' => env('REALTIME_TRANSPORT', 'websocket'),
     ],

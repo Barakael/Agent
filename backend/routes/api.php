@@ -9,7 +9,9 @@ use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\PermissionController;
 use App\Http\Controllers\RunnerController;
 use App\Http\Controllers\SystemController;
+use App\Http\Controllers\TaskController;
 use App\Http\Controllers\TradingController;
+use App\Http\Controllers\TradingWebhookController;
 use App\Http\Controllers\VoiceController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -29,6 +31,12 @@ use Illuminate\Support\Facades\Route;
 Route::middleware('throttle:auth-login')->group(function () {
     Route::post('/auth/register', [AuthController::class, 'register']);
     Route::post('/auth/login', [AuthController::class, 'login']);
+});
+
+// Cursor Automation webhooks (HMAC — not Sanctum)
+Route::middleware(['throttle:60,1', 'automation.signature'])->prefix('webhooks/trading')->group(function () {
+    Route::get('/daily-context', [TradingWebhookController::class, 'dailyContext']);
+    Route::post('/daily-plan', [TradingWebhookController::class, 'dailyPlan']);
 });
 
 // Protected routes (require authentication via Sanctum)
@@ -109,6 +117,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/positions/close-all', [TradingController::class, 'closeAll']);
         Route::post('/positions/{contractId}/close', [TradingController::class, 'closePosition']);
         Route::post('/backtest', [TradingController::class, 'backtest'])->middleware('role:admin');
+        Route::get('/plan/active', [TradingController::class, 'activePlan']);
+        Route::get('/reviews', [TradingController::class, 'reviews']);
     });
 
     // User endpoint

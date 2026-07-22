@@ -19,6 +19,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'log.activity' => App\Http\Middleware\LogActivity::class,
             'role' => App\Http\Middleware\EnsureRole::class,
+            'automation.signature' => App\Http\Middleware\VerifyAutomationSignature::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

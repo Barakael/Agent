@@ -38,6 +38,7 @@ class TradingService
         $response = match (strtoupper($method)) {
             'GET' => $http->get($url, $body),
             'POST' => $http->post($url, $body),
+            'PUT' => $http->put($url, $body),
             default => throw new \InvalidArgumentException("Unsupported method {$method}"),
         };
 
@@ -147,5 +148,15 @@ class TradingService
     public function pushAiDecision(array $decision): array
     {
         return $this->request('POST', '/analysis/ai-decision', $decision);
+    }
+
+    public function getActivePlan(): array
+    {
+        return $this->request('GET', '/plan/active');
+    }
+
+    public function putActivePlan(array $plan): array
+    {
+        return $this->request('PUT', '/plan/active', $plan);
     }
 }

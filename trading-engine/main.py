@@ -247,6 +247,42 @@ async def run_backtest(auth: bool = Depends(validate_api_key)):
     return {"data": results}
 
 
+class DailyPlanRequest(BaseModel):
+    date: str
+    pairs: list[str]
+    strategy_id: str = "macd_rsi"
+    sl_pips: int = 15
+    tp_pips: int = 30
+    risk_percent: float = 1.5
+    max_stake_usd: float = 25.0
+    notes: str = ""
+    source: str = "cursor-automation"
+
+
+@app.get("/plan/active")
+async def get_active_plan(auth: bool = Depends(validate_api_key)):
+    if bot is None:
+        return {"data": None}
+    plan = bot.get_active_plan()
+    stored = bot.plan_store.load()
+    return {
+        "data": plan.to_dict() if plan else None,
+        "stored": stored.to_dict() if stored else None,
+        "active_for_today": plan is not None,
+    }
+
+
+@app.put("/plan/active")
+async def put_active_plan(body: DailyPlanRequest, auth: bool = Depends(validate_api_key)):
+    if bot is None:
+        raise HTTPException(status_code=503, detail="Bot not initialized")
+    try:
+        plan = bot.set_active_plan(body.model_dump())
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"status": "ok", "data": plan.to_dict(), "active_for_today": plan.is_active_for_today()}
+
+
 @app.get("/candles/{symbol}")
 async def get_candles(symbol: str, auth: bool = Depends(validate_api_key)):
     if bot is None:

@@ -27,7 +27,12 @@ sudo systemctl start wayda-trading-engine wayda-ai-agent
 export TRADING_MODE=demo
 ./trading-engine/scripts/start_demo.sh
 # Cron daily report:
-# 0 22 * * * REPORT_DIR=/var/log/wayda ./trading-engine/scripts/demo_daily_report.sh
+# 0 21 5 * * * REPORT_DIR=/var/www/Agent/trading-engine/reports/demo \
+#   TRADING_SERVICE_URL=http://127.0.0.1:8002 TRADING_SERVICE_API_KEY=... \
+#   /var/www/Agent/trading-engine/scripts/demo_daily_report.sh
+
+# Cursor Automations: set AUTOMATION_WEBHOOK_SECRET in backend/.env
+# Docs: docs/CURSOR_TRADING_AUTOMATION.md
 ```
 
 ## Local runner (Mac desktop tools)

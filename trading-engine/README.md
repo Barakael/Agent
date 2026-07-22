@@ -23,7 +23,7 @@ On the token form enable:
 - **Trade** — buy/sell
 - **Account management** — list accounts, OTP WebSocket
 
-Copy the `pat_...` token once → `DERIV_API_TOKEN` in `.env`
+Copy the `pat_...` token once → `DERIV_API_TOKEN` in `.env`. Copy the **Application ID** from that **same** registered app → `DERIV_APP_ID`. If REST returns `Invalid application`, the UUID is wrong (often a Client ID from another screen) — open the app that issued the PAT and copy its Application ID again.
 
 Complete any **partner profile** banner on developers.deriv.com — tokens fail with 401 until done.
 

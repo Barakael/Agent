@@ -31,10 +31,18 @@ async def list_accounts() -> list[dict[str, Any]]:
             headers=_rest_headers(),
         )
         if resp.status_code == 401:
+            body = (resp.text or "").strip()
+            if "invalid application" in body.lower():
+                raise RuntimeError(
+                    "Deriv REST 401 Invalid application: DERIV_APP_ID does not match the "
+                    "application that issued this PAT. On developers.deriv.com open the same "
+                    "app that created the token and copy its Application ID into DERIV_APP_ID "
+                    "(not a random Client ID). Complete any partner-profile banner first."
+                )
             raise RuntimeError(
                 "Deriv REST 401: token invalid or partner profile incomplete. "
                 "Create token via home.deriv.com → Profile → API Management, "
-                "with Trade + Account management scopes."
+                f"with Trade + Account management scopes. Response: {body[:200]}"
             )
         if resp.status_code == 403:
             raise RuntimeError(

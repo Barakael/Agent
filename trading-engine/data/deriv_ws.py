@@ -48,6 +48,32 @@ class DerivWebSocketClient:
             self.ws_url,
             ping_interval=20,
             ping_timeout=20,
+            open_timeout=60,
+            close_timeout=5,
+        )
+        self._listen_task = asyncio.create_task(self._listen())
+
+    async def _reconnect(self, url: str) -> None:
+        if self._listen_task:
+            self._listen_task.cancel()
+            try:
+                await self._listen_task
+            except asyncio.CancelledError:
+                pass
+            self._listen_task = None
+        if self._ws:
+            try:
+                await self._ws.close()
+            except Exception:
+                pass
+            self._ws = None
+        self.ws_url = url
+        self._ws = await websockets.connect(
+            url,
+            ping_interval=20,
+            ping_timeout=20,
+            open_timeout=60,
+            close_timeout=5,
         )
         self._listen_task = asyncio.create_task(self._listen())
 
@@ -114,18 +140,23 @@ class DerivWebSocketClient:
         otp_url = await get_otp_websocket_url(account_id)
         logger.info("Deriv OTP WebSocket URL obtained for account %s", account_id)
 
-        if self._listen_task:
-            self._listen_task.cancel()
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
             try:
-                await self._listen_task
-            except asyncio.CancelledError:
+                await self._reconnect(otp_url)
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                logger.warning("OTP WebSocket connect attempt %s failed: %s", attempt, exc)
+                await asyncio.sleep(1.5 * attempt)
+        if last_exc is not None:
+            # Restore public/legacy socket so callers are not left on a dead connection
+            try:
+                await self._reconnect(settings.DERIV_WS_URL)
+            except Exception:
                 pass
-        if self._ws:
-            await self._ws.close()
-
-        self.ws_url = otp_url
-        self._ws = await websockets.connect(otp_url, ping_interval=20, ping_timeout=20)
-        self._listen_task = asyncio.create_task(self._listen())
+            raise last_exc
 
         self._authorized = True
         self._is_demo = "demo" in otp_url.lower()
@@ -187,13 +218,18 @@ class DerivWebSocketClient:
 
         token = str(self.api_token)
         is_pat = token.startswith("pat_")
-        is_uuid_app = not settings.DERIV_APP_ID.strip().isdigit()
+        # New developers.deriv.com apps use non-numeric App IDs (UUID or alphanumeric)
+        is_new_app = bool(settings.DERIV_APP_ID.strip()) and not settings.DERIV_APP_ID.strip().isdigit()
 
-        if is_pat and is_uuid_app:
+        if is_pat and is_new_app:
             try:
                 return await self._authorize_via_otp()
             except Exception as exc:
                 logger.warning("OTP auth failed (%s), trying legacy WebSocket", exc)
+                try:
+                    await self._reconnect(settings.DERIV_WS_URL)
+                except Exception:
+                    logger.warning("Could not restore legacy WebSocket after OTP failure")
 
         try:
             return await self._authorize_legacy()

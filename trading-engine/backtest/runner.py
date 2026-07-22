@@ -164,6 +164,7 @@ class BacktestRunner:
                         symbol, settings.granularity_seconds, count
                     )
                     df = pd.DataFrame(candles)
+                    print(f"{symbol}: fetched {len(df)} candles")
                     results[symbol] = self.run_on_dataframe(symbol, df).to_dict()
                 except Exception as exc:
                     results[symbol] = {"error": str(exc)}

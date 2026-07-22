@@ -20,7 +20,27 @@ export type TradingStatus = {
     seconds_until_close: number
     close_time_utc: string
   }
+  active_plan?: DailyPlan | null
+  stored_plan?: DailyPlan | null
   not_configured?: boolean
+}
+
+export type DailyPlan = {
+  date: string
+  pairs: string[]
+  strategy_id: string
+  sl_pips: number
+  tp_pips: number
+  risk_percent: number
+  max_stake_usd: number
+  notes?: string
+  source?: string
+}
+
+export type TradingReview = {
+  file: string
+  date: string | null
+  content: string
 }
 
 export type PreflightSnapshot = {
@@ -170,4 +190,23 @@ export async function closePosition(contractId: number) {
 export async function closeAllPositions() {
   const response = await api.post('/trading/positions/close-all')
   return response.data
+}
+
+export async function fetchActivePlan() {
+  const response = await api.get<{
+    data: DailyPlan | null
+    stored?: DailyPlan | null
+    active_for_today?: boolean
+  }>('/trading/plan/active')
+  return response.data
+}
+
+export async function fetchTradingReviews() {
+  const response = await api.get<{
+    data: {
+      reviews: TradingReview[]
+      latest_ai_decision: AnalysisDecision | null
+    }
+  }>('/trading/reviews')
+  return response.data.data
 }

@@ -4,10 +4,12 @@ import EmptyState from '../components/ui/EmptyState'
 import {
   closeAllPositions,
   closePosition,
+  fetchActivePlan,
   fetchAnalysisDecision,
   fetchTradingJournal,
   fetchTradingMetrics,
   fetchTradingPositions,
+  fetchTradingReviews,
   fetchTradingStatus,
   killTrading,
   pauseTrading,
@@ -16,10 +18,12 @@ import {
   runPreflight,
   startTradingBot,
   type AnalysisDecision,
+  type DailyPlan,
   type PreflightSnapshot,
   type TradeJournalEntry,
   type TradingMetrics,
   type TradingPosition,
+  type TradingReview,
   type TradingStatus,
 } from '../services/tradingService'
 
@@ -34,6 +38,8 @@ export default function TradingPage() {
   const [analysisArmed, setAnalysisArmed] = useState(false)
   const [sources, setSources] = useState<Record<string, string>>({})
   const [aiDecision, setAiDecision] = useState<AnalysisDecision | null>(null)
+  const [activePlan, setActivePlan] = useState<DailyPlan | null>(null)
+  const [latestReview, setLatestReview] = useState<TradingReview | null>(null)
   const [preflightRunning, setPreflightRunning] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -47,12 +53,14 @@ export default function TradingPage() {
   const refresh = useCallback(async () => {
     try {
       setError('')
-      const [s, p, j, m, ai] = await Promise.all([
+      const [s, p, j, m, ai, planResp, reviewsResp] = await Promise.all([
         fetchTradingStatus(),
         fetchTradingPositions(),
         fetchTradingJournal(),
         fetchTradingMetrics(),
         fetchAnalysisDecision(),
+        fetchActivePlan().catch(() => ({ data: null })),
+        fetchTradingReviews().catch(() => ({ reviews: [], latest_ai_decision: null })),
       ])
       setStatus(s)
       setPositions(p)
@@ -62,6 +70,8 @@ export default function TradingPage() {
       setAnalysisArmed(s.analysis_armed ?? false)
       setSources(s.sources ?? {})
       setAiDecision(ai)
+      setActivePlan(planResp.data ?? s.active_plan ?? null)
+      setLatestReview(reviewsResp.reviews?.[0] ?? null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load trading data')
     } finally {
@@ -239,6 +249,66 @@ export default function TradingPage() {
         {aiDecision?.summary ? (
           <p className="mt-3 text-xs text-slate-600 dark:text-slate-400">{aiDecision.summary}</p>
         ) : null}
+      </section>
+
+      <section className="mb-4 grid gap-4 lg:grid-cols-2">
+        <div className="panel">
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Active plan</h2>
+          <p className="mt-1 text-xs text-slate-500">
+            Daily directions from automation (clamped by the engine).
+          </p>
+          {activePlan ? (
+            <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <dt className="text-slate-500">Date</dt>
+                <dd className="font-medium">{activePlan.date}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">Strategy</dt>
+                <dd className="font-medium">{activePlan.strategy_id}</dd>
+              </div>
+              <div className="col-span-2">
+                <dt className="text-slate-500">Pairs</dt>
+                <dd className="font-medium">{activePlan.pairs.join(', ')}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">SL / TP</dt>
+                <dd className="font-medium">
+                  {activePlan.sl_pips} / {activePlan.tp_pips} pips
+                </dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">Risk / max stake</dt>
+                <dd className="font-medium">
+                  {activePlan.risk_percent}% / ${activePlan.max_stake_usd}
+                </dd>
+              </div>
+              <div className="col-span-2">
+                <dt className="text-slate-500">Notes</dt>
+                <dd className="font-medium whitespace-pre-wrap">{activePlan.notes || '—'}</dd>
+              </div>
+              <div className="col-span-2">
+                <dt className="text-slate-500">Source</dt>
+                <dd className="font-medium">{activePlan.source || '—'}</dd>
+              </div>
+            </dl>
+          ) : (
+            <p className="mt-3 text-xs text-slate-500">No active plan for today — using .env defaults.</p>
+          )}
+        </div>
+        <div className="panel">
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Latest review</h2>
+          <p className="mt-1 text-xs text-slate-500">Automation / daily analysis notes.</p>
+          {latestReview ? (
+            <pre className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-900">
+              {latestReview.content.slice(0, 2000)}
+            </pre>
+          ) : aiDecision?.summary ? (
+            <p className="mt-3 text-xs text-slate-700 dark:text-slate-300">{aiDecision.summary}</p>
+          ) : (
+            <p className="mt-3 text-xs text-slate-500">No review yet.</p>
+          )}
+        </div>
       </section>
 
       <section className="grid gap-4 xl:grid-cols-3">

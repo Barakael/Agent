@@ -51,7 +51,11 @@ class TradeSignal:
 
 
 class SignalEngine:
-    """Generate signals only on confluence — single-indicator signals discarded."""
+    """Generate signals on MACD crossover with RSI confirmation (single best strategy).
+
+    BUY:  MACD bullish cross and RSI below 55 (not chasing extended upside)
+    SELL: MACD bearish cross and RSI above 45 (not chasing extended downside)
+    """
 
     def __init__(self) -> None:
         self.rsi_period = settings.RSI_PERIOD
@@ -60,6 +64,9 @@ class SignalEngine:
         self.macd_fast = settings.MACD_FAST
         self.macd_slow = settings.MACD_SLOW
         self.macd_signal_period = settings.MACD_SIGNAL
+        # Soft RSI confirmation bands (stricter than oversold/overbought extremes)
+        self.rsi_buy_max = 55.0
+        self.rsi_sell_min = 45.0
 
     def evaluate(self, symbol: str, df: pd.DataFrame) -> Optional[TradeSignal]:
         min_bars = max(self.rsi_period, self.macd_slow + self.macd_signal_period) + 2
@@ -82,7 +89,7 @@ class SignalEngine:
         bull_cross = detect_bullish_crossover(macd_line, signal_line)
         bear_cross = detect_bearish_crossover(macd_line, signal_line)
 
-        if rsi_val < self.rsi_oversold and bull_cross:
+        if bull_cross and rsi_val < self.rsi_buy_max:
             return TradeSignal(
                 symbol=symbol,
                 direction=SignalDirection.BUY,
@@ -91,10 +98,10 @@ class SignalEngine:
                 macd_signal=signal_val,
                 price=price,
                 epoch=epoch,
-                reason=f"RSI oversold ({rsi_val:.1f}) + MACD bullish crossover",
+                reason=f"MACD bullish cross + RSI {rsi_val:.1f} < {self.rsi_buy_max}",
             )
 
-        if rsi_val > self.rsi_overbought and bear_cross:
+        if bear_cross and rsi_val > self.rsi_sell_min:
             return TradeSignal(
                 symbol=symbol,
                 direction=SignalDirection.SELL,
@@ -103,7 +110,7 @@ class SignalEngine:
                 macd_signal=signal_val,
                 price=price,
                 epoch=epoch,
-                reason=f"RSI overbought ({rsi_val:.1f}) + MACD bearish crossover",
+                reason=f"MACD bearish cross + RSI {rsi_val:.1f} > {self.rsi_sell_min}",
             )
 
         return None

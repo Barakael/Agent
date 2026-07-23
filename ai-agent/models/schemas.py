@@ -91,10 +91,22 @@ class ToolExecutionResponseSchema(BaseModel):
 
 
 class TradingDailyAnalysisResponseSchema(BaseModel):
-    decision: str = Field(..., description="GO or NO-GO")
+    decision: str = Field(..., description="GO, CAUTION, or NO-GO")
     summary: str = Field(..., description="Narrative summary")
     reasons: List[str] = Field(default_factory=list)
     risks: List[str] = Field(default_factory=list)
+    recommended_trade_mode: Optional[str] = Field(None, description="pattern or bias")
+    pairs: List[str] = Field(default_factory=list)
+    enabled_strategies: List[str] = Field(default_factory=list)
+    directional_bias: Optional[str] = None
+    hold_policy: Optional[str] = None
+    confidence: Optional[int] = Field(None, ge=0, le=100)
+    sl_pips: Optional[int] = None
+    tp_pips: Optional[int] = None
+    risk_percent: Optional[float] = None
+    max_stake_usd: Optional[float] = None
+    notes: Optional[str] = None
+    recommendation: Dict[str, Any] = Field(default_factory=dict)
 
 
 class VoiceTranscribeResponseSchema(BaseModel):

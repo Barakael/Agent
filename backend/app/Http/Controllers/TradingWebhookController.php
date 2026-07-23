@@ -56,6 +56,14 @@ class TradingWebhookController extends Controller
         $report = $this->latestDailyReport();
         $decision = TradingAnalysisDecision::query()->latest()->first();
 
+        $marketBrief = null;
+        try {
+            $briefResp = $this->trading->getMarketBrief();
+            $marketBrief = $briefResp['data'] ?? $briefResp;
+        } catch (\Exception $e) {
+            $marketBrief = ['error' => 'unreachable', 'message' => $e->getMessage()];
+        }
+
         return response()->json([
             'data' => [
                 'utc_date' => now('UTC')->toDateString(),
@@ -65,6 +73,7 @@ class TradingWebhookController extends Controller
                 'active_plan' => $plan,
                 'latest_report' => $report,
                 'latest_ai_decision' => $decision,
+                'market_brief' => $marketBrief,
                 'allowlist_pairs' => ['frxEURUSD', 'frxGBPUSD', 'frxUSDJPY', 'frxAUDUSD'],
                 'strategy_win_rates' => $status['strategy_win_rates'] ?? [],
                 'armed_strategies' => $status['armed_strategies'] ?? [],
@@ -101,6 +110,7 @@ class TradingWebhookController extends Controller
             'tp_pips' => 'sometimes|integer|min:10|max:200',
             'risk_percent' => 'sometimes|numeric|gt:0|max:2',
             'max_stake_usd' => 'sometimes|numeric|gt:0|max:50',
+            'confidence' => 'sometimes|integer|min:0|max:100',
             'notes' => 'sometimes|string|max:2000',
             'source' => 'sometimes|string|max:64',
         ]);
@@ -129,6 +139,7 @@ class TradingWebhookController extends Controller
         $data['tp_pips'] = $data['tp_pips'] ?? 30;
         $data['risk_percent'] = min((float) ($data['risk_percent'] ?? 1.5), 2.0);
         $data['max_stake_usd'] = min((float) ($data['max_stake_usd'] ?? 25), 50);
+        $data['confidence'] = (int) ($data['confidence'] ?? 50);
         $data['notes'] = $data['notes'] ?? '';
         $data['source'] = $data['source'] ?? 'cursor-automation';
 

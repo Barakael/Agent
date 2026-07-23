@@ -49,6 +49,12 @@ class OrderExecutor:
 
         contract_type = self._contract_type(signal.direction)
         duration = settings.CANDLE_TIMEFRAME_MINUTES * 3  # unused for multipliers
+        # Multiplier limit_order expects USD amounts, not pip prices
+        sl_usd = round(float(risk.stake) * 0.8, 2)
+        tp_usd = round(
+            float(risk.stake) * (risk.take_profit_pips / max(1, risk.stop_loss_pips)),
+            2,
+        )
 
         result = await self.client.buy_contract(
             symbol=signal.symbol,
@@ -56,8 +62,8 @@ class OrderExecutor:
             amount=risk.stake,
             duration=duration,
             duration_unit="m",
-            stop_loss=risk.stop_loss_price,
-            take_profit=risk.take_profit_price,
+            stop_loss=sl_usd,
+            take_profit=tp_usd,
             multiplier=100,
         )
         logger.info("Order placed %s %s contract_id=%s", signal.symbol, contract_type, result.get("contract_id"))
@@ -83,13 +89,15 @@ class OrderExecutor:
 
         contract_type = "MULTUP" if direction.lower() == "buy" else "MULTDOWN"
         duration = settings.CANDLE_TIMEFRAME_MINUTES * 3
+        sl_usd = round(float(stake) * 0.8, 2)
+        tp_usd = round(float(stake) * 2.0, 2)
         return await self.client.buy_contract(
             symbol=symbol,
             contract_type=contract_type,
             amount=stake,
             duration=duration,
             duration_unit="m",
-            stop_loss=stop_loss,
-            take_profit=take_profit,
+            stop_loss=sl_usd,
+            take_profit=tp_usd,
             multiplier=100,
         )

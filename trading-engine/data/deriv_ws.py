@@ -365,12 +365,13 @@ class DerivWebSocketClient:
             proposal_payload["duration"] = duration
             proposal_payload["duration_unit"] = duration_unit
 
-        # limit_order is only valid for multipliers / accumulators on the new API
+        # limit_order is only valid for multipliers / accumulators on the new API.
+        # For MULTUP/MULTDOWN these fields are USD P/L amounts (max 2 d.p.), not FX prices.
         if contract_type in {"MULTUP", "MULTDOWN", "ACCU"}:
             if stop_loss is not None:
-                proposal_payload.setdefault("limit_order", {})["stop_loss"] = stop_loss
+                proposal_payload.setdefault("limit_order", {})["stop_loss"] = round(float(stop_loss), 2)
             if take_profit is not None:
-                proposal_payload.setdefault("limit_order", {})["take_profit"] = take_profit
+                proposal_payload.setdefault("limit_order", {})["take_profit"] = round(float(take_profit), 2)
 
         proposal_resp = await self._send(proposal_payload)
         if "error" in proposal_resp:

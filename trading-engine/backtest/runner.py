@@ -13,6 +13,8 @@ from config import settings
 from data.deriv_ws import DerivWebSocketClient
 from risk.gate import RiskGate
 from signals.engine import SignalDirection, SignalEngine
+from strategies import get_strategy
+from strategies.base import StrategyContext
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,7 @@ class BacktestResult:
     max_drawdown: float = 0.0
     expectancy: float = 0.0
     passed: bool = False
+    high_win_rate: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -44,6 +47,7 @@ class BacktestResult:
             "max_drawdown": round(self.max_drawdown, 2),
             "expectancy": round(self.expectancy, 4),
             "passed": self.passed,
+            "high_win_rate": getattr(self, "high_win_rate", False),
         }
 
 
@@ -54,19 +58,29 @@ class BacktestRunner:
         self.risk_gate = RiskGate()
         self.risk_gate.reset_session(initial_balance)
 
-    def run_on_dataframe(self, symbol: str, df: pd.DataFrame) -> BacktestResult:
+    def run_on_dataframe(
+        self,
+        symbol: str,
+        df: pd.DataFrame,
+        strategy_id: str = "macd_rsi",
+    ) -> BacktestResult:
         result = BacktestResult()
         balance = self.initial_balance
         equity_curve = [balance]
         open_trade: BacktestTrade | None = None
         # Fresh risk session per symbol so one pair cannot kill the whole run
         self.risk_gate.reset_session(balance)
+        strategy = get_strategy(strategy_id)
+        ctx = StrategyContext(trade_mode="pattern", hold_policy="intraday")
 
         min_bars = settings.MACD_SLOW + settings.MACD_SIGNAL + settings.RSI_PERIOD + 2
 
         for i in range(min_bars, len(df)):
             window = df.iloc[: i + 1].copy()
-            signal = self.signal_engine.evaluate(symbol, window)
+            if strategy:
+                signal = strategy.evaluate(symbol, window, ctx)
+            else:
+                signal = self.signal_engine.evaluate(symbol, window)
             bar = df.iloc[i]
             price = float(bar["close"])
 
@@ -128,6 +142,12 @@ class BacktestRunner:
             result.expectancy > 0
             and result.total_pnl > 0
             and result.max_drawdown < self.initial_balance * 0.15
+            and len(result.trades) > 0
+        )
+        # High win-rate gate is applied separately for pattern strategy arming
+        result.high_win_rate = (
+            len(result.trades) >= settings.STRATEGY_MIN_TRADES
+            and result.win_rate >= settings.STRATEGY_MIN_WIN_RATE
         )
         return result
 

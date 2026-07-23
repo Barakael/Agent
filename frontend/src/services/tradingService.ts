@@ -29,6 +29,11 @@ export type DailyPlan = {
   date: string
   pairs: string[]
   strategy_id: string
+  enabled_strategies?: string[]
+  trade_mode?: 'pattern' | 'bias'
+  directional_bias?: 'buy' | 'sell' | 'neutral'
+  hold_policy?: 'intraday' | 'swing'
+  max_hold_days?: number
   sl_pips: number
   tp_pips: number
   risk_percent: number

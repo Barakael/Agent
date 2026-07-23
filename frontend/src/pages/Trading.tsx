@@ -264,8 +264,24 @@ export default function TradingPage() {
                 <dd className="font-medium">{activePlan.date}</dd>
               </div>
               <div>
+                <dt className="text-slate-500">Mode</dt>
+                <dd className="font-medium">
+                  {activePlan.trade_mode || 'pattern'} / {activePlan.hold_policy || 'intraday'}
+                </dd>
+              </div>
+              <div>
                 <dt className="text-slate-500">Strategy</dt>
                 <dd className="font-medium">{activePlan.strategy_id}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">Bias</dt>
+                <dd className="font-medium">{activePlan.directional_bias || 'neutral'}</dd>
+              </div>
+              <div className="col-span-2">
+                <dt className="text-slate-500">Enabled strategies</dt>
+                <dd className="font-medium">
+                  {(activePlan.enabled_strategies || [activePlan.strategy_id]).join(', ')}
+                </dd>
               </div>
               <div className="col-span-2">
                 <dt className="text-slate-500">Pairs</dt>
@@ -283,6 +299,12 @@ export default function TradingPage() {
                   {activePlan.risk_percent}% / ${activePlan.max_stake_usd}
                 </dd>
               </div>
+              {activePlan.max_hold_days ? (
+                <div>
+                  <dt className="text-slate-500">Max hold days</dt>
+                  <dd className="font-medium">{activePlan.max_hold_days}</dd>
+                </div>
+              ) : null}
               <div className="col-span-2">
                 <dt className="text-slate-500">Notes</dt>
                 <dd className="font-medium whitespace-pre-wrap">{activePlan.notes || '—'}</dd>

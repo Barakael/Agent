@@ -145,6 +145,23 @@ class TradingService
         return $this->request('GET', '/analysis/sources');
     }
 
+    public function getMarketBrief(): array
+    {
+        $http = Http::withHeaders($this->getHeaders())->timeout(max($this->timeout, 90));
+        $url = "{$this->tradingUrl}/analysis/market-brief";
+        $response = $http->get($url);
+        if (! $response->successful()) {
+            Log::error('Trading Service Error', [
+                'status' => $response->status(),
+                'body' => $response->body(),
+                'path' => '/analysis/market-brief',
+            ]);
+            throw new \Exception("Trading service returned status {$response->status()}");
+        }
+
+        return $response->json() ?? [];
+    }
+
     public function pushAiDecision(array $decision): array
     {
         return $this->request('POST', '/analysis/ai-decision', $decision);

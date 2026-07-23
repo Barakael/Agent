@@ -25,6 +25,11 @@ class PositionManager:
         self.risk = risk
         self._close_gate = close_gate
         self._cached: List[dict] = []
+        self._swing_contract_ids: set[int] = set()
+
+    def mark_swing(self, contract_id: int) -> None:
+        if contract_id:
+            self._swing_contract_ids.add(int(contract_id))
 
     async def refresh(self) -> List[dict]:
         try:
@@ -67,17 +72,28 @@ class PositionManager:
         if self.risk:
             self.risk.record_pnl(pnl)
 
-    async def close_all(self, *, force: bool = False, df_by_symbol: Optional[dict] = None) -> List[dict]:
+    async def close_all(
+        self,
+        *,
+        force: bool = False,
+        df_by_symbol: Optional[dict] = None,
+        skip_swing: bool = False,
+    ) -> List[dict]:
         await self.refresh()
         results = []
         for pos in list(self._cached):
             cid = pos.get("contract_id")
             if not cid:
                 continue
+            cid_int = int(cid)
+            if skip_swing and cid_int in self._swing_contract_ids:
+                logger.info("Keeping swing position contract_id=%s past session close", cid_int)
+                continue
             symbol = pos.get("underlying") or pos.get("symbol") or ""
             df = (df_by_symbol or {}).get(symbol)
             try:
-                results.append(await self.close_position(int(cid), force=force, df=df))
+                results.append(await self.close_position(cid_int, force=force, df=df))
+                self._swing_contract_ids.discard(cid_int)
             except Exception:
                 logger.exception("Failed to close contract %s", cid)
         return results

@@ -95,14 +95,11 @@ class RiskGate:
         return PIP_SIZE.get(symbol, 0.0001)
 
     def calculate_stake(self, balance: float, sl_pips: int, symbol: str) -> float:
-        """Position size from fixed % risk — never flat lot size."""
+        """USD stake for multipliers = % of balance risked (not FX lot sizing)."""
         if sl_pips <= 0 or balance <= 0:
             return 0.0
-        risk_amount = balance * (self.risk_percent / 100.0)
-        pip_value_per_unit = self._pip_size(symbol) * 10  # simplified for Deriv stake
-        if pip_value_per_unit <= 0:
-            return 0.0
-        stake = risk_amount / (sl_pips * pip_value_per_unit)
+        # For Deriv multipliers, `amount` is the USD stake. Risk % maps directly to stake.
+        stake = balance * (self.risk_percent / 100.0)
         return max(1.0, round(stake, 2))
 
     def calculate_sl_tp_prices(
@@ -170,6 +167,9 @@ class RiskGate:
                 decision=RiskDecision.REJECTED,
                 reason="Stake calculation failed",
             )
+        # Always enforce hard ceiling even if plan omitted max_stake
+        hard_ceiling = float(getattr(settings, "PLAN_MAX_STAKE_USD_CEILING", 50.0))
+        stake = min(stake, hard_ceiling)
         if max_stake_usd is not None and max_stake_usd > 0:
             stake = min(stake, float(max_stake_usd))
 

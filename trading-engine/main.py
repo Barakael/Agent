@@ -119,12 +119,32 @@ async def analysis_sources(auth: bool = Depends(validate_api_key)):
     return {"data": bot.analysis.source_status()}
 
 
+@app.get("/analysis/market-brief")
+async def market_brief(auth: bool = Depends(validate_api_key)):
+    """Live multi-source brief for Cursor Automations (prices, calendar, headlines, fitness)."""
+    from analysis.market_brief import build_market_brief
+
+    try:
+        brief = await build_market_brief(bot=bot)
+    except Exception as exc:
+        logger.exception("Market brief failed")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"data": brief}
+
+
 class AiDecisionRequest(BaseModel):
     decision: str
     summary: str = ""
     reasons: list = Field(default_factory=list)
     risks: list = Field(default_factory=list)
     source: str = "ai-agent"
+    recommended_trade_mode: str | None = None
+    pairs: list[str] = Field(default_factory=list)
+    enabled_strategies: list[str] = Field(default_factory=list)
+    directional_bias: str | None = None
+    hold_policy: str | None = None
+    confidence: int | None = None
+    recommendation: dict = Field(default_factory=dict)
 
 
 @app.post("/analysis/ai-decision")
@@ -251,10 +271,16 @@ class DailyPlanRequest(BaseModel):
     date: str
     pairs: list[str]
     strategy_id: str = "macd_rsi"
+    enabled_strategies: list[str] | None = None
+    trade_mode: str = "pattern"
+    directional_bias: str = "neutral"
+    hold_policy: str = "intraday"
+    max_hold_days: int = 1
     sl_pips: int = 15
     tp_pips: int = 30
     risk_percent: float = 1.5
     max_stake_usd: float = 25.0
+    confidence: int = 50
     notes: str = ""
     source: str = "cursor-automation"
 
@@ -276,8 +302,14 @@ async def get_active_plan(auth: bool = Depends(validate_api_key)):
 async def put_active_plan(body: DailyPlanRequest, auth: bool = Depends(validate_api_key)):
     if bot is None:
         raise HTTPException(status_code=503, detail="Bot not initialized")
+    from plan.schema import clamp_plan_dict
+
+    payload = body.model_dump(exclude_none=True)
+    if not payload.get("enabled_strategies") and payload.get("strategy_id"):
+        payload["enabled_strategies"] = [payload["strategy_id"]]
     try:
-        plan = bot.set_active_plan(body.model_dump())
+        clamped = clamp_plan_dict(payload)
+        plan = bot.set_active_plan(clamped.to_dict())
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"status": "ok", "data": plan.to_dict(), "active_for_today": plan.is_active_for_today()}

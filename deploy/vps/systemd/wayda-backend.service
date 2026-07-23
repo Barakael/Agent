@@ -1,0 +1,16 @@
+[Unit]
+Description=Wayda Laravel Backend
+After=network.target
+
+[Service]
+Type=simple
+User=wayda
+Group=wayda
+WorkingDirectory=/etc/bin/agent/backend
+EnvironmentFile=/etc/bin/agent/backend/.env
+ExecStart=/usr/bin/php8.4 artisan serve --host=127.0.0.1 --port=8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

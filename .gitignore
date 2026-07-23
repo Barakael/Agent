@@ -41,3 +41,4 @@ build/
 .eggs/
 .pytest_cache/
 .ipynb_checkpoints/
+.tunnel.error.log

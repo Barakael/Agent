@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class SessionManager:
-    """Enforce intraday-only trading — zero overnight exposure."""
+    """Enforce intraday trading; swing positions may hold overnight."""
 
     def __init__(self) -> None:
         self.open_hour = settings.SESSION_OPEN_HOUR_UTC
@@ -28,7 +28,7 @@ class SessionManager:
         return current >= open_time or current < close_time
 
     def must_force_close(self, now: datetime | None = None) -> bool:
-        """True when we are at or past session close — close all positions."""
+        """True when we are at or past session close — close intraday positions."""
         now = now or datetime.now(timezone.utc)
         close_time = time(self.close_hour, self.close_minute)
         current = now.time()

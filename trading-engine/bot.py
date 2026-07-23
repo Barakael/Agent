@@ -21,6 +21,8 @@ from plan.schema import DailyPlan
 from risk.gate import RiskDecision, RiskGate
 from risk.session import SessionManager
 from signals.engine import SignalEngine
+from strategies import evaluate_strategies
+from strategies.base import StrategyContext
 
 logger = logging.getLogger(__name__)
 
@@ -124,13 +126,45 @@ class TradingBot:
             return
 
         if self.session.must_force_close():
-            await self._close_all_positions(force=True)
+            await self._close_all_positions(force=True, skip_swing=True)
             return
 
         df = self.aggregator.get_dataframe(symbol)
-        signal = self.signals.evaluate(symbol, df)
+        ctx = StrategyContext(
+            trade_mode=plan.trade_mode if plan else "pattern",
+            directional_bias=plan.directional_bias if plan else "neutral",
+            hold_policy=plan.hold_policy if plan else "intraday",
+        )
+        strategy_ids = (
+            list(plan.enabled_strategies)
+            if plan
+            else ["macd_rsi"]
+        )
+        armed = self.analysis.armed_strategy_ids
+        if plan and plan.trade_mode == "pattern":
+            pattern_armed = {s for s in armed if s != "bias_swing"}
+            # If gate has not armed any patterns yet, allow planned strategies (demo / cold start)
+            armed_filter = pattern_armed if pattern_armed else None
+        else:
+            armed_filter = None
+        signal = evaluate_strategies(
+            symbol,
+            df,
+            strategy_ids,
+            ctx,
+            armed_ids=armed_filter,
+        )
         if signal is None:
             return
+
+        # Bias: one open bias position per pair
+        if getattr(signal, "trade_mode", "pattern") == "bias":
+            await self.positions.refresh()
+            for pos in self.positions.positions:
+                psym = pos.get("underlying") or pos.get("symbol") or ""
+                if psym == symbol:
+                    logger.info("Bias skip %s — already open", symbol)
+                    return
 
         news_paused, news_reason = self.calendar.is_trading_paused()
         sl_pips = plan.sl_pips if plan else None
@@ -177,7 +211,8 @@ class TradingBot:
             )
             return
 
-        if not self.session.is_session_open():
+        hold = getattr(signal, "hold_policy", "intraday")
+        if hold != "swing" and not self.session.is_session_open():
             return
 
         if settings.ANALYSIS_REQUIRE_PREFLIGHT and not self.analysis_armed:
@@ -187,19 +222,21 @@ class TradingBot:
         order = await self.executor.execute_signal(signal, risk_result)
         contract_id = str(order.get("contract_id", "")) if order else None
         self.journal.log_trade_open(signal, risk_result, contract_id, settings.TRADING_MODE)
+        if contract_id and hold == "swing":
+            self.positions.mark_swing(int(order["contract_id"]) if order and order.get("contract_id") else 0)
         await self.telegram.trade_opened(
             symbol, signal.direction.value, risk_result.stake, settings.TRADING_MODE
         )
 
-    async def _close_all_positions(self, force: bool = False) -> None:
+    async def _close_all_positions(self, force: bool = False, skip_swing: bool = False) -> None:
         dfs = {s: self.aggregator.get_dataframe(s) for s in settings.pairs_list}
-        await self.positions.close_all(force=force, df_by_symbol=dfs)
+        await self.positions.close_all(force=force, df_by_symbol=dfs, skip_swing=skip_swing)
 
     async def _session_watchdog(self) -> None:
         while self._running:
             if self.session.must_force_close():
-                logger.warning("End of session — force closing all positions")
-                await self._close_all_positions(force=True)
+                logger.warning("End of session — force closing intraday positions (swing kept)")
+                await self._close_all_positions(force=True, skip_swing=True)
                 metrics = compute_metrics()
                 await self.telegram.daily_summary(self.risk.daily_pnl, metrics)
             await asyncio.sleep(60)
@@ -346,6 +383,8 @@ class TradingBot:
             "account_type": "demo" if self.client.is_demo else "live",
             "account_error": self._account_probe_error,
             "analysis_armed": self.analysis_armed,
+            "armed_strategies": sorted(self.analysis.armed_strategy_ids),
+            "strategy_win_rates": self.analysis.strategy_win_rates,
             "preflight": preflight,
             "sources": self.analysis.source_status(),
             "session": self.session.session_status(),

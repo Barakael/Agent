@@ -11,6 +11,7 @@ class TradingAnalysisDecision extends Model
         'summary',
         'reasons',
         'risks',
+        'recommendation',
         'sources',
         'source',
     ];
@@ -18,6 +19,7 @@ class TradingAnalysisDecision extends Model
     protected $casts = [
         'reasons' => 'array',
         'risks' => 'array',
+        'recommendation' => 'array',
         'sources' => 'array',
     ];
 }

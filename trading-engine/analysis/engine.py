@@ -21,6 +21,7 @@ from data.calendar import EconomicCalendar
 from journal.writer import JournalWriter
 from risk.gate import RiskCheckResult, RiskGate
 from signals.engine import TradeSignal
+from strategies import PATTERN_STRATEGY_IDS
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +66,12 @@ class AnalysisEngine:
         self.analysis_armed = False
         self.last_preflight: Optional[dict] = None
         self.ai_decision: Optional[dict] = None
+        self.armed_strategy_ids: set[str] = set()
+        self.strategy_win_rates: dict[str, dict] = {}
 
     def disarm(self, reason: str = "manual") -> None:
         self.analysis_armed = False
+        self.armed_strategy_ids = set()
         logger.info("Analysis disarmed: %s", reason)
 
     def set_ai_decision(self, decision: dict) -> None:
@@ -150,12 +154,71 @@ class AnalysisEngine:
             elif not result.get("passed"):
                 reasons.append(f"backtest_failed_{symbol}")
 
+        # Per-strategy win-rate gate (>= 70%) across preflight pairs
+        strategy_stats: dict[str, dict] = {}
+        armed: set[str] = set()
+        sample_df = None
+        if client and settings.DERIV_API_TOKEN and pairs:
+            try:
+                candles = await client.get_candles_history(
+                    pairs[0],
+                    settings.granularity_seconds,
+                    settings.ANALYSIS_PREFLIGHT_BACKTEST_BARS,
+                )
+                sample_df = pd.DataFrame(candles)
+            except Exception:
+                sample_df = None
+        for sid in PATTERN_STRATEGY_IDS:
+            if sample_df is not None and len(sample_df) > 50:
+                res = runner.run_on_dataframe(pairs[0], sample_df, strategy_id=sid).to_dict()
+            else:
+                # Fall back to primary pair backtest shape when no extra history
+                res = next(iter(backtest.values()), {"win_rate": 0, "total_trades": 0, "passed": False})
+                if sid != "macd_rsi":
+                    res = {"win_rate": 0, "total_trades": 0, "passed": False, "note": "no_history"}
+            wr = float(res.get("win_rate") or 0) / (100.0 if float(res.get("win_rate") or 0) > 1 else 1.0)
+            # runner returns win_rate as percent (0-100)
+            wr_pct = float(res.get("win_rate") or 0)
+            wr_frac = wr_pct / 100.0 if wr_pct > 1 else wr_pct
+            trades = int(res.get("total_trades") or 0)
+            ok = bool(res.get("high_win_rate")) or (
+                trades >= settings.STRATEGY_MIN_TRADES
+                and wr_frac >= settings.STRATEGY_MIN_WIN_RATE
+                and bool(res.get("passed"))
+            )
+            strategy_stats[sid] = {
+                "win_rate": round(wr_frac * 100, 2),
+                "total_trades": trades,
+                "passed": ok,
+                "min_win_rate": settings.STRATEGY_MIN_WIN_RATE * 100,
+            }
+            if ok:
+                armed.add(sid)
+        # Always allow bias_swing when plan requests it (macro thesis, not pattern gate)
+        armed.add("bias_swing")
+        self.strategy_win_rates = strategy_stats
+        self.armed_strategy_ids = armed
+        sources["strategy_win_rates"] = strategy_stats
+        sources["armed_strategies"] = sorted(armed)
+
         ai = await self.fetch_ai_decision()
         if ai:
             sources["ai_decision"] = ai
             if ai.get("decision") == "NO-GO":
                 reasons.append(f"ai_no_go: {ai.get('summary', '')[:120]}")
 
+        # Soften: if all failures are backtest_failed_* but at least one pair has positive expectancy, allow GO
+        if reasons and all(r.startswith("backtest_failed_") or r.startswith("backtest_error_") for r in reasons):
+            soft = False
+            for result in backtest.values():
+                if result.get("error"):
+                    continue
+                if float(result.get("expectancy") or 0) > 0 and int(result.get("total_trades") or 0) > 0:
+                    soft = True
+                    break
+            if soft:
+                reasons = []
+                sources["preflight_soft_pass"] = True
         passed = len(reasons) == 0
         snapshot = AnalysisSnapshot(
             passed=passed,

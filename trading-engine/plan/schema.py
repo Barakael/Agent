@@ -39,6 +39,7 @@ class DailyPlan(BaseModel):
     tp_pips: int = Field(default=30, ge=TP_MIN)
     risk_percent: float = Field(default=1.5, gt=0)
     max_stake_usd: float = Field(default=25.0, gt=0)
+    confidence: int = Field(default=50, ge=0, le=100)
     notes: str = ""
     source: str = "cursor-automation"
 

@@ -117,10 +117,40 @@ class EconomicCalendar:
         return False, ""
 
     def upcoming_high_impact(self, hours: int = 24) -> List[EconomicEvent]:
+        return self.upcoming_events(hours=hours, impacts={"high"})
+
+    def upcoming_events(
+        self,
+        hours: int = 24,
+        impacts: set[str] | None = None,
+    ) -> List[EconomicEvent]:
+        """Upcoming calendar events filtered by impact (default High+Medium)."""
         now = datetime.now(timezone.utc)
         cutoff = now + timedelta(hours=hours)
+        wanted = {i.lower() for i in (impacts or {"high", "medium"})}
         return [
             e
             for e in self._events
-            if e.is_high_impact and now <= e.event_time <= cutoff
+            if e.impact.lower() in wanted and now <= e.event_time <= cutoff
         ]
+
+    def to_brief_dict(self, hours: int = 24) -> dict:
+        high = self.upcoming_high_impact(hours)
+        medium_high = self.upcoming_events(hours=hours, impacts={"high", "medium"})
+        next_6h = self.upcoming_events(hours=6, impacts={"high", "medium"})
+
+        def _ser(e: EconomicEvent) -> dict:
+            return {
+                "title": e.title,
+                "currency": e.currency,
+                "impact": e.impact,
+                "time": e.event_time.isoformat(),
+            }
+
+        return {
+            "events_loaded": len(self._events),
+            "last_fetch": self._last_fetch.isoformat() if self._last_fetch else None,
+            "upcoming_high_impact": [_ser(e) for e in high[:20]],
+            "upcoming_medium_high": [_ser(e) for e in medium_high[:30]],
+            "next_6h": [_ser(e) for e in next_6h[:15]],
+        }

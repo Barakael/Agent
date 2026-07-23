@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     TRAILING_STOP_ENABLED: bool = os.getenv("TRAILING_STOP_ENABLED", "false").lower() == "true"
     TRAILING_STOP_PIPS: int = int(os.getenv("TRAILING_STOP_PIPS", "10"))
 
+    STRATEGY_MIN_WIN_RATE: float = float(os.getenv("STRATEGY_MIN_WIN_RATE", "0.70"))
+    STRATEGY_MIN_TRADES: int = int(os.getenv("STRATEGY_MIN_TRADES", "3"))
+
     # Daily plan clamps (automation callback)
     PLAN_RISK_PERCENT_MAX: float = float(os.getenv("PLAN_RISK_PERCENT_MAX", "2.0"))
     PLAN_MAX_STAKE_USD_CEILING: float = float(os.getenv("PLAN_MAX_STAKE_USD_CEILING", "50"))

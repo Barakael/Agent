@@ -48,10 +48,22 @@ Trading engine: `TRADING_MODE=demo`, `DERIV_REQUIRE_DEMO=true`.
 
 ## Mailcow TLS + site
 
-1. DNS A for `wayda.co.tz` → `161.97.182.204`
+1. DNS A for `wayda.co.tz` / `www.wayda.co.tz` → `161.97.182.204`
 2. Add `wayda.co.tz,www.wayda.co.tz` to `ADDITIONAL_SAN` in `/opt/mailcow-dockerized/mailcow.conf`
-3. Copy `deploy/vps/nginx-wayda-mailcow.conf` → `/opt/mailcow-dockerized/data/conf/nginx/wayda.co.tz.conf`
-4. `cd /opt/mailcow-dockerized && docker compose restart nginx-mailcow acme-mailcow`
+3. Copy `deploy/vps/nginx-wayda-mailcow.conf` → `/opt/mailcow-dockerized/data/conf/nginx/wayda.co.tz.conf`  
+   (port 80 must serve `/.well-known/acme-challenge/` before any HTTPS redirect)
+4. Recreate ACME so it picks up the new SAN, then force renew:
+
+```bash
+cd /opt/mailcow-dockerized
+docker compose up -d --force-recreate acme-mailcow
+docker compose restart nginx-mailcow
+docker exec mailcowdockerized-acme-mailcow-1 touch /var/lib/acme/force_renew
+docker restart mailcowdockerized-acme-mailcow-1
+docker logs -f mailcowdockerized-acme-mailcow-1   # wait for "wayda.co.tz verified"
+```
+
+Cert SANs should include `wayda.co.tz` and `www.wayda.co.tz` (shared with mail.ticketfasta.co.tz).
 
 ## systemd
 
@@ -71,6 +83,21 @@ systemctl enable --now wayda-backend wayda-ai-agent wayda-trading-engine
 ## Cursor Automation
 
 Base URL: `https://wayda.co.tz` — see [docs/CURSOR_TRADING_AUTOMATION.md](../../docs/CURSOR_TRADING_AUTOMATION.md)
+
+## Frontend UI sync (SmartSell restyle)
+
+After UI changes, rebuild the SPA against production API and sync `dist` to the nginx root:
+
+```bash
+# From repo on Mac (or on VPS under /etc/bin/agent/frontend)
+cd frontend
+VITE_API_URL=https://wayda.co.tz/api npm run build
+
+# Sync to VPS nginx root (same path as deploy/vps/nginx-wayda-host.conf)
+rsync -avz --delete dist/ root@161.97.182.204:/etc/bin/agent/frontend/dist/
+```
+
+Or use `./deploy/vps/deploy.sh`, which builds with `VITE_API_URL` and rsyncs the full tree.
 
 ## Dual-mode trading
 

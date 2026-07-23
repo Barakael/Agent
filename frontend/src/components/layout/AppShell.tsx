@@ -3,7 +3,7 @@ import {
   Bot,
   ClipboardList,
   Cog,
-  // Gauge,
+  FileBarChart2,
   History,
   KeyRound,
   LogOut,
@@ -28,6 +28,7 @@ const fullNavigation = [
   { to: '/chat', label: 'Chat', icon: MessageSquare },
   { to: '/tasks', label: 'Tasks', icon: ClipboardList },
   { to: '/trading', label: 'Trading', icon: TrendingUp },
+  { to: '/reports', label: 'Reports', icon: FileBarChart2 },
   { to: '/activity', label: 'Activity Logs', icon: History },
   { to: '/memory', label: 'Memory', icon: Bot },
   { to: '/permissions', label: 'Permissions', icon: Shield },
@@ -60,8 +61,10 @@ export default function AppShell({
       <aside className={`wayda-sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="wayda-sidebar-head">
           <Link to={homeLink} className="wayda-brand" onClick={() => setSidebarOpen(false)}>
-            <Bot size={16} />
-            <span>{isMessagingMobile ? 'Wayda' : 'Wayda'}</span>
+            <span className="wayda-brand-mark">
+              <Bot size={15} />
+            </span>
+            <span>Wayda</span>
           </Link>
           <button type="button" className="wayda-icon-button lg:hidden" onClick={() => setSidebarOpen(false)} aria-label="Close sidebar">
             <X size={16} />
@@ -69,15 +72,15 @@ export default function AppShell({
         </div>
 
         {!isMessagingMobile ? (
-          <button type="button" className="wayda-new-chat">
+          <Link to="/chat" className="wayda-new-chat" onClick={() => setSidebarOpen(false)}>
             <MessageSquare size={15} />
             <span>New chat</span>
-          </button>
+          </Link>
         ) : null}
 
         <nav className="wayda-nav">
           {navigation.map((item) => (
-            <NavItem key={item.to} to={item.to} label={item.label} icon={item.icon} />
+            <NavItem key={item.to} to={item.to} label={item.label} icon={item.icon} onNavigate={() => setSidebarOpen(false)} />
           ))}
         </nav>
 
@@ -120,13 +123,22 @@ export default function AppShell({
   )
 }
 
-function NavItem({ to, label, icon: Icon }: { to: string; label: string; icon: LucideIcon }) {
+function NavItem({
+  to,
+  label,
+  icon: Icon,
+  onNavigate,
+}: {
+  to: string
+  label: string
+  icon: LucideIcon
+  onNavigate?: () => void
+}) {
   return (
     <NavLink
       to={to}
-      className={({ isActive }) =>
-        `wayda-nav-item ${isActive ? 'active' : ''}`
-      }
+      onClick={onNavigate}
+      className={({ isActive }) => `wayda-nav-item ${isActive ? 'active' : ''}`}
     >
       <Icon size={15} />
       <span>{label}</span>

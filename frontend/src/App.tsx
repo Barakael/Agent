@@ -10,6 +10,7 @@ import DashboardPage from './pages/Dashboard'
 import ChatPage from './pages/Chat'
 import TasksPage from './pages/Tasks'
 import TradingPage from './pages/Trading'
+import ReportsPage from './pages/Reports'
 import ActivityLogsPage from './pages/ActivityLogs'
 import MemoryPage from './pages/Memory'
 import PermissionsPage from './pages/Permissions'
@@ -64,6 +65,7 @@ function App() {
               <Route path="/chat" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
               <Route path="/tasks" element={<MessagingGuard><TasksPage /></MessagingGuard>} />
               <Route path="/trading" element={<MessagingGuard><TradingPage /></MessagingGuard>} />
+              <Route path="/reports" element={<MessagingGuard><ReportsPage /></MessagingGuard>} />
               <Route path="/activity" element={<MessagingGuard><ActivityLogsPage /></MessagingGuard>} />
               <Route path="/memory" element={<MessagingGuard><MemoryPage /></MessagingGuard>} />
               <Route path="/permissions" element={<MessagingGuard><PermissionsPage /></MessagingGuard>} />

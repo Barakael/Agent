@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Activity, BookOpen, ClipboardList, Crosshair, Gauge, LineChart } from 'lucide-react'
 import AppShell from '../components/layout/AppShell'
 import EmptyState from '../components/ui/EmptyState'
+import SectionCard from '../components/ui/SectionCard'
+import StatCard from '../components/ui/StatCard'
 import {
   closeAllPositions,
   closePosition,
@@ -136,7 +139,6 @@ export default function TradingPage() {
     }
   }
 
-  const armedColor = analysisArmed ? 'text-emerald-600' : 'text-red-600'
   const preflightDecision = preflight?.decision ?? 'NO-GO'
 
   return (
@@ -147,16 +149,11 @@ export default function TradingPage() {
         </div>
       ) : null}
 
-      <section className="panel mb-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Analysis Engine (ATAE)
-            </h2>
-            <p className="mt-1 text-xs text-slate-500">
-              No orders execute unless preflight passes and per-trade scenario analysis succeeds.
-            </p>
-          </div>
+      <SectionCard
+        title="Analysis Engine (ATAE)"
+        icon={Activity}
+        className="mb-4"
+        action={
           <button
             type="button"
             className="btn-secondary text-xs"
@@ -165,39 +162,24 @@ export default function TradingPage() {
           >
             {preflightRunning ? 'Running…' : 'Run Preflight'}
           </button>
-        </div>
-
-        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="rounded-lg border p-3 dark:border-slate-700">
-            <p className="text-xs text-slate-500">Armed</p>
-            <p className={`text-lg font-semibold uppercase ${armedColor}`}>
-              {analysisArmed ? 'Yes' : 'Blocked'}
-            </p>
-          </div>
-          <div className="rounded-lg border p-3 dark:border-slate-700">
-            <p className="text-xs text-slate-500">Preflight</p>
-            <p
-              className={`text-lg font-semibold uppercase ${
-                preflightDecision === 'GO' ? 'text-emerald-600' : 'text-red-600'
-              }`}
-            >
-              {preflightDecision}
-            </p>
-          </div>
-          <div className="rounded-lg border p-3 dark:border-slate-700">
-            <p className="text-xs text-slate-500">AI Daily</p>
-            <p
-              className={`text-lg font-semibold uppercase ${
-                aiDecision?.decision === 'GO' ? 'text-emerald-600' : 'text-slate-500'
-              }`}
-            >
-              {aiDecision?.decision ?? '—'}
-            </p>
-          </div>
-          <div className="rounded-lg border p-3 dark:border-slate-700">
-            <p className="text-xs text-slate-500">Mode gate</p>
-            <p className="text-lg font-semibold">{status?.mode ?? '—'}</p>
-          </div>
+        }
+      >
+        <p className="mb-3 text-xs text-[color:var(--wayda-muted)]">
+          No orders execute unless preflight passes and per-trade scenario analysis succeeds.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard label="Armed" value={analysisArmed ? 'Yes' : 'Blocked'} tone={analysisArmed ? 'success' : 'danger'} />
+          <StatCard
+            label="Preflight"
+            value={preflightDecision}
+            tone={preflightDecision === 'GO' ? 'success' : 'danger'}
+          />
+          <StatCard
+            label="AI Daily"
+            value={aiDecision?.decision ?? '—'}
+            tone={aiDecision?.decision === 'GO' ? 'success' : 'muted'}
+          />
+          <StatCard label="Mode gate" value={status?.mode ?? '—'} />
         </div>
 
         {!analysisArmed ? (
@@ -210,10 +192,7 @@ export default function TradingPage() {
         {Object.keys(sources).length > 0 ? (
           <div className="mt-3 flex flex-wrap gap-2">
             {Object.entries(sources).map(([name, state]) => (
-              <span
-                key={name}
-                className="rounded-full border px-2 py-0.5 text-xs dark:border-slate-700"
-              >
+              <span key={name} className="status-pill">
                 {name}: {state}
               </span>
             ))}
@@ -222,23 +201,23 @@ export default function TradingPage() {
 
         {preflight?.sources?.backtest ? (
           <div className="mt-3 overflow-x-auto">
-            <p className="mb-1 text-xs font-medium text-slate-600 dark:text-slate-400">Backtest</p>
-            <table className="w-full text-left text-xs">
+            <p className="mb-1 text-xs font-medium text-[color:var(--wayda-muted)]">Backtest</p>
+            <table className="report-table text-xs">
               <thead>
-                <tr className="border-b dark:border-slate-700">
-                  <th className="py-1 pr-3">Pair</th>
-                  <th className="py-1 pr-3">Pass</th>
-                  <th className="py-1 pr-3">Win rate</th>
-                  <th className="py-1">P&L</th>
+                <tr>
+                  <th>Pair</th>
+                  <th>Pass</th>
+                  <th>Win rate</th>
+                  <th>P&L</th>
                 </tr>
               </thead>
               <tbody>
                 {Object.entries(preflight.sources.backtest).map(([pair, bt]) => (
-                  <tr key={pair} className="border-b dark:border-slate-800">
-                    <td className="py-1 pr-3">{pair}</td>
-                    <td className="py-1 pr-3">{bt.passed ? '✓' : '✗'}</td>
-                    <td className="py-1 pr-3">{bt.win_rate != null ? `${bt.win_rate}%` : '—'}</td>
-                    <td className="py-1">{bt.total_pnl ?? '—'}</td>
+                  <tr key={pair}>
+                    <td>{pair}</td>
+                    <td>{bt.passed ? '✓' : '✗'}</td>
+                    <td className="font-mono-metric">{bt.win_rate != null ? `${bt.win_rate}%` : '—'}</td>
+                    <td className="font-mono-metric">{bt.total_pnl ?? '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -247,129 +226,121 @@ export default function TradingPage() {
         ) : null}
 
         {aiDecision?.summary ? (
-          <p className="mt-3 text-xs text-slate-600 dark:text-slate-400">{aiDecision.summary}</p>
+          <p className="mt-3 text-xs text-[color:var(--wayda-muted)]">{aiDecision.summary}</p>
         ) : null}
-      </section>
+      </SectionCard>
 
       <section className="mb-4 grid gap-4 lg:grid-cols-2">
-        <div className="panel">
-          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Active plan</h2>
-          <p className="mt-1 text-xs text-slate-500">
+        <SectionCard title="Active plan" icon={ClipboardList}>
+          <p className="mb-3 text-xs text-[color:var(--wayda-muted)]">
             Daily directions from automation (clamped by the engine).
           </p>
           {activePlan ? (
-            <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
+            <dl className="grid grid-cols-2 gap-2 text-xs">
               <div>
-                <dt className="text-slate-500">Date</dt>
-                <dd className="font-medium">{activePlan.date}</dd>
+                <dt className="text-[color:var(--wayda-muted)]">Date</dt>
+                <dd className="font-medium font-mono-metric">{activePlan.date}</dd>
               </div>
               <div>
-                <dt className="text-slate-500">Mode</dt>
+                <dt className="text-[color:var(--wayda-muted)]">Mode</dt>
                 <dd className="font-medium">
                   {activePlan.trade_mode || 'pattern'} / {activePlan.hold_policy || 'intraday'}
                 </dd>
               </div>
               <div>
-                <dt className="text-slate-500">Strategy</dt>
+                <dt className="text-[color:var(--wayda-muted)]">Strategy</dt>
                 <dd className="font-medium">{activePlan.strategy_id}</dd>
               </div>
               <div>
-                <dt className="text-slate-500">Bias</dt>
+                <dt className="text-[color:var(--wayda-muted)]">Bias</dt>
                 <dd className="font-medium">{activePlan.directional_bias || 'neutral'}</dd>
               </div>
               <div className="col-span-2">
-                <dt className="text-slate-500">Enabled strategies</dt>
+                <dt className="text-[color:var(--wayda-muted)]">Enabled strategies</dt>
                 <dd className="font-medium">
                   {(activePlan.enabled_strategies || [activePlan.strategy_id]).join(', ')}
                 </dd>
               </div>
               <div className="col-span-2">
-                <dt className="text-slate-500">Pairs</dt>
+                <dt className="text-[color:var(--wayda-muted)]">Pairs</dt>
                 <dd className="font-medium">{activePlan.pairs.join(', ')}</dd>
               </div>
               <div>
-                <dt className="text-slate-500">SL / TP</dt>
-                <dd className="font-medium">
+                <dt className="text-[color:var(--wayda-muted)]">SL / TP</dt>
+                <dd className="font-medium font-mono-metric">
                   {activePlan.sl_pips} / {activePlan.tp_pips} pips
                 </dd>
               </div>
               <div>
-                <dt className="text-slate-500">Risk / max stake</dt>
-                <dd className="font-medium">
+                <dt className="text-[color:var(--wayda-muted)]">Risk / max stake</dt>
+                <dd className="font-medium font-mono-metric">
                   {activePlan.risk_percent}% / ${activePlan.max_stake_usd}
                 </dd>
               </div>
               {activePlan.max_hold_days ? (
                 <div>
-                  <dt className="text-slate-500">Max hold days</dt>
+                  <dt className="text-[color:var(--wayda-muted)]">Max hold days</dt>
                   <dd className="font-medium">{activePlan.max_hold_days}</dd>
                 </div>
               ) : null}
               <div className="col-span-2">
-                <dt className="text-slate-500">Notes</dt>
+                <dt className="text-[color:var(--wayda-muted)]">Notes</dt>
                 <dd className="font-medium whitespace-pre-wrap">{activePlan.notes || '—'}</dd>
               </div>
               <div className="col-span-2">
-                <dt className="text-slate-500">Source</dt>
+                <dt className="text-[color:var(--wayda-muted)]">Source</dt>
                 <dd className="font-medium">{activePlan.source || '—'}</dd>
               </div>
             </dl>
           ) : (
-            <p className="mt-3 text-xs text-slate-500">No active plan for today — using .env defaults.</p>
+            <p className="text-xs text-[color:var(--wayda-muted)]">No active plan for today — using .env defaults.</p>
           )}
-        </div>
-        <div className="panel">
-          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Latest review</h2>
-          <p className="mt-1 text-xs text-slate-500">Automation / daily analysis notes.</p>
+        </SectionCard>
+        <SectionCard title="Latest review" icon={BookOpen}>
+          <p className="mb-3 text-xs text-[color:var(--wayda-muted)]">Automation / daily analysis notes.</p>
           {latestReview ? (
-            <pre className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border bg-slate-50 p-2 text-xs dark:border-slate-700 dark:bg-slate-900">
+            <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-[color:var(--wayda-border)] bg-white/60 p-2 text-xs dark:border-slate-700 dark:bg-slate-900/50">
               {latestReview.content.slice(0, 2000)}
             </pre>
           ) : aiDecision?.summary ? (
-            <p className="mt-3 text-xs text-slate-700 dark:text-slate-300">{aiDecision.summary}</p>
+            <p className="text-xs text-[color:var(--wayda-muted)]">{aiDecision.summary}</p>
           ) : (
-            <p className="mt-3 text-xs text-slate-500">No review yet.</p>
+            <p className="text-xs text-[color:var(--wayda-muted)]">No review yet.</p>
           )}
-        </div>
+        </SectionCard>
       </section>
 
       <section className="grid gap-4 xl:grid-cols-3">
-        <article className="panel xl:col-span-1">
-          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Bot Status</h2>
+        <SectionCard title="Bot status" icon={Gauge} className="xl:col-span-1">
           {loading ? (
-            <p className="mt-2 text-sm text-slate-500">Loading…</p>
+            <p className="text-sm text-[color:var(--wayda-muted)]">Loading…</p>
           ) : (
-            <div className="mt-3 space-y-2 text-sm">
+            <div className="space-y-2 text-sm">
               <p>
                 State: <span className={`font-semibold uppercase ${stateColor}`}>{status?.state ?? 'unknown'}</span>
               </p>
               <p>
                 Account:{' '}
-                <span
-                  className={`font-semibold uppercase ${
-                    status?.is_demo ? 'text-emerald-600' : 'text-red-600'
-                  }`}
-                >
+                <span className={`font-semibold uppercase ${status?.is_demo ? 'text-emerald-600' : 'text-red-600'}`}>
                   {status?.account_type ?? '—'}
                 </span>
                 {status?.loginid ? (
-                  <span className="ml-1 text-xs text-slate-500">({status.loginid})</span>
+                  <span className="ml-1 font-mono-metric text-xs text-[color:var(--wayda-muted)]">({status.loginid})</span>
                 ) : null}
               </p>
               {!status?.is_demo && status?.loginid ? (
                 <p className="text-xs font-medium text-red-600">
-                  Live account detected — create a demo PAT on developers.deriv.com or bot will block
-                  start.
+                  Live account detected — create a demo PAT on developers.deriv.com or bot will block start.
                 </p>
               ) : null}
               {status?.account_error ? (
                 <p className="text-xs font-medium text-red-600">{status.account_error}</p>
               ) : null}
               <p>Mode: {status?.mode ?? '—'}</p>
-              <p>Daily P&L: ${status?.daily_pnl?.toFixed(2) ?? '0.00'}</p>
-              <p>Balance: ${status?.balance?.toFixed(2) ?? '—'}</p>
+              <p className="font-mono-metric">Daily P&L: ${status?.daily_pnl?.toFixed(2) ?? '0.00'}</p>
+              <p className="font-mono-metric">Balance: ${status?.balance?.toFixed(2) ?? '—'}</p>
               {status?.session ? (
-                <p className="text-xs text-slate-500">
+                <p className="text-xs text-[color:var(--wayda-muted)]">
                   Session {status.session.session_open ? 'open' : 'closed'} · closes {status.session.close_time_utc} UTC
                 </p>
               ) : null}
@@ -396,12 +367,11 @@ export default function TradingPage() {
               Kill Switch
             </button>
           </div>
-        </article>
+        </SectionCard>
 
-        <article className="panel xl:col-span-2">
-          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Manual Order</h2>
-          <p className="mt-1 text-xs text-slate-500">Stop loss and take profit are mandatory.</p>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        <SectionCard title="Manual order" icon={Crosshair} className="xl:col-span-2">
+          <p className="mb-3 text-xs text-[color:var(--wayda-muted)]">Stop loss and take profit are mandatory.</p>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             <select className="form-input" value={symbol} onChange={(e) => setSymbol(e.target.value)}>
               {PAIRS.map((p) => (
                 <option key={p} value={p}>
@@ -420,22 +390,24 @@ export default function TradingPage() {
               Place Order
             </button>
           </div>
-        </article>
+        </SectionCard>
       </section>
 
       <section className="mt-4 grid gap-4 xl:grid-cols-2">
-        <article className="panel">
-          <h2 className="mb-3 text-sm font-semibold text-slate-900 dark:text-slate-100">Open Positions</h2>
+        <SectionCard title="Open positions" icon={LineChart}>
           {positions.length === 0 ? (
             <EmptyState title="No open positions" description="Autonomous or manual trades will appear here." />
           ) : (
             <div className="space-y-2">
               {positions.map((pos) => (
-                <div key={pos.contract_id} className="flex items-center justify-between rounded-lg border p-3 dark:border-slate-700">
+                <div
+                  key={pos.contract_id}
+                  className="flex items-center justify-between rounded-lg border border-[color:var(--wayda-border)] p-3 dark:border-slate-700"
+                >
                   <div>
                     <p className="font-medium">{pos.symbol}</p>
-                    <p className="text-xs text-slate-500">
-                      {pos.contract_type} · P&L: {pos.profit}
+                    <p className="font-mono-metric text-xs text-[color:var(--wayda-muted)]">
+                      {pos.contract_type} · P&L: {pos.profit} · #{pos.contract_id}
                     </p>
                   </div>
                   <button
@@ -449,68 +421,56 @@ export default function TradingPage() {
               ))}
             </div>
           )}
-        </article>
+        </SectionCard>
 
-        <article className="panel">
-          <h2 className="mb-3 text-sm font-semibold text-slate-900 dark:text-slate-100">Performance</h2>
+        <SectionCard title="Performance" icon={Gauge}>
           {metrics ? (
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800">
-                <p className="text-xs text-slate-500">Win rate</p>
-                <p className="text-lg font-semibold">{metrics.win_rate}%</p>
-              </div>
-              <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800">
-                <p className="text-xs text-slate-500">Total P&L</p>
-                <p className="text-lg font-semibold">${metrics.total_pnl}</p>
-              </div>
-              <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800">
-                <p className="text-xs text-slate-500">Trades</p>
-                <p className="text-lg font-semibold">{metrics.total_trades}</p>
-              </div>
-              <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800">
-                <p className="text-xs text-slate-500">Max drawdown</p>
-                <p className="text-lg font-semibold">${metrics.max_drawdown}</p>
-              </div>
+            <div className="grid grid-cols-2 gap-3">
+              <StatCard label="Win rate" value={`${metrics.win_rate}%`} />
+              <StatCard label="Total P&L" value={`$${metrics.total_pnl}`} tone={metrics.total_pnl < 0 ? 'danger' : 'success'} />
+              <StatCard label="Trades" value={metrics.total_trades} />
+              <StatCard label="Max drawdown" value={`$${metrics.max_drawdown}`} tone="danger" />
             </div>
           ) : (
-            <p className="text-sm text-slate-500">No metrics yet</p>
+            <p className="text-sm text-[color:var(--wayda-muted)]">No metrics yet</p>
           )}
-        </article>
+        </SectionCard>
       </section>
 
-      <section className="panel mt-4">
-        <h2 className="mb-3 text-sm font-semibold text-slate-900 dark:text-slate-100">Trade Journal</h2>
+      <SectionCard title="Trade journal" icon={BookOpen} className="mt-4">
         {journal.length === 0 ? (
           <EmptyState title="No trades logged" description="Signals and trades are recorded in log_only mode." />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
+            <table className="report-table">
               <thead>
-                <tr className="border-b dark:border-slate-700">
-                  <th className="py-2 pr-4">Symbol</th>
-                  <th className="py-2 pr-4">Dir</th>
-                  <th className="py-2 pr-4">Entry</th>
-                  <th className="py-2 pr-4">P&L</th>
-                  <th className="py-2 pr-4">Status</th>
-                  <th className="py-2">Mode</th>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Dir</th>
+                  <th>Entry</th>
+                  <th>P&L</th>
+                  <th>Status</th>
+                  <th>Mode</th>
                 </tr>
               </thead>
               <tbody>
                 {journal.map((t) => (
-                  <tr key={t.id} className="border-b dark:border-slate-800">
-                    <td className="py-2 pr-4">{t.symbol}</td>
-                    <td className="py-2 pr-4 uppercase">{t.direction}</td>
-                    <td className="py-2 pr-4">{t.entry_price}</td>
-                    <td className="py-2 pr-4">{t.pnl ?? '—'}</td>
-                    <td className="py-2 pr-4">{t.status}</td>
-                    <td className="py-2">{t.mode}</td>
+                  <tr key={t.id}>
+                    <td>{t.symbol}</td>
+                    <td className="uppercase">{t.direction}</td>
+                    <td className="font-mono-metric">{t.entry_price}</td>
+                    <td className="font-mono-metric">{t.pnl ?? '—'}</td>
+                    <td>
+                      <span className="status-pill">{t.status}</span>
+                    </td>
+                    <td>{t.mode}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         )}
-      </section>
+      </SectionCard>
     </AppShell>
   )
 }

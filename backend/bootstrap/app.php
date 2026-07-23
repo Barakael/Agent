@@ -16,6 +16,13 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->api(
             append: [App\Http\Middleware\LogActivity::class],
         );
+        $middleware->redirectGuestsTo(function (Request $request) {
+            if ($request->is('api/*') || $request->expectsJson()) {
+                return null;
+            }
+
+            return '/login';
+        });
         $middleware->alias([
             'log.activity' => App\Http\Middleware\LogActivity::class,
             'role' => App\Http\Middleware\EnsureRole::class,

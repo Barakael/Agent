@@ -11,6 +11,15 @@ use Illuminate\Support\Facades\Validator;
 
 class TradingWebhookController extends Controller
 {
+    private const STRATEGY_IDS = [
+        'macd_rsi',
+        'ema_pullback',
+        'rsi_divergence',
+        'bollinger_mean_reversion',
+        'engulfing_htf',
+        'bias_swing',
+    ];
+
     public function __construct(protected TradingService $trading)
     {
     }
@@ -57,12 +66,19 @@ class TradingWebhookController extends Controller
                 'latest_report' => $report,
                 'latest_ai_decision' => $decision,
                 'allowlist_pairs' => ['frxEURUSD', 'frxGBPUSD', 'frxUSDJPY', 'frxAUDUSD'],
+                'strategy_win_rates' => $status['strategy_win_rates'] ?? [],
+                'armed_strategies' => $status['armed_strategies'] ?? [],
                 'clamps' => [
                     'sl_pips' => [5, 50],
                     'tp_pips' => [10, 100],
+                    'swing_sl_pips' => [5, 80],
+                    'swing_tp_pips' => [10, 200],
                     'risk_percent_max' => 2.0,
                     'max_stake_usd_ceiling' => 50,
-                    'strategy_ids' => ['macd_rsi'],
+                    'strategy_ids' => self::STRATEGY_IDS,
+                    'trade_modes' => ['pattern', 'bias'],
+                    'hold_policies' => ['intraday', 'swing'],
+                    'min_strategy_win_rate' => 70,
                 ],
             ],
         ]);
@@ -74,9 +90,15 @@ class TradingWebhookController extends Controller
             'date' => 'required|date_format:Y-m-d',
             'pairs' => 'required|array|min:1',
             'pairs.*' => 'required|string|in:frxEURUSD,frxGBPUSD,frxUSDJPY,frxAUDUSD',
-            'strategy_id' => 'sometimes|string|in:macd_rsi',
-            'sl_pips' => 'sometimes|integer|min:5|max:50',
-            'tp_pips' => 'sometimes|integer|min:10|max:100',
+            'strategy_id' => 'sometimes|string|in:'.implode(',', self::STRATEGY_IDS),
+            'enabled_strategies' => 'sometimes|array|max:5',
+            'enabled_strategies.*' => 'string|in:'.implode(',', self::STRATEGY_IDS),
+            'trade_mode' => 'sometimes|string|in:pattern,bias',
+            'directional_bias' => 'sometimes|string|in:buy,sell,neutral',
+            'hold_policy' => 'sometimes|string|in:intraday,swing',
+            'max_hold_days' => 'sometimes|integer|min:1|max:14',
+            'sl_pips' => 'sometimes|integer|min:5|max:80',
+            'tp_pips' => 'sometimes|integer|min:10|max:200',
             'risk_percent' => 'sometimes|numeric|gt:0|max:2',
             'max_stake_usd' => 'sometimes|numeric|gt:0|max:50',
             'notes' => 'sometimes|string|max:2000',
@@ -97,13 +119,27 @@ class TradingWebhookController extends Controller
         }
 
         $data = $validator->validated();
+        $data['trade_mode'] = $data['trade_mode'] ?? 'pattern';
+        $data['directional_bias'] = $data['directional_bias'] ?? 'neutral';
+        $data['hold_policy'] = $data['hold_policy'] ?? ($data['trade_mode'] === 'bias' ? 'swing' : 'intraday');
+        $data['max_hold_days'] = $data['max_hold_days'] ?? ($data['trade_mode'] === 'bias' ? 5 : 1);
         $data['strategy_id'] = $data['strategy_id'] ?? 'macd_rsi';
+        $data['enabled_strategies'] = $data['enabled_strategies'] ?? [$data['strategy_id']];
         $data['sl_pips'] = $data['sl_pips'] ?? 15;
         $data['tp_pips'] = $data['tp_pips'] ?? 30;
         $data['risk_percent'] = min((float) ($data['risk_percent'] ?? 1.5), 2.0);
         $data['max_stake_usd'] = min((float) ($data['max_stake_usd'] ?? 25), 50);
         $data['notes'] = $data['notes'] ?? '';
         $data['source'] = $data['source'] ?? 'cursor-automation';
+
+        if ($data['trade_mode'] === 'bias' && ($data['directional_bias'] ?? 'neutral') === 'neutral') {
+            return response()->json(['message' => 'directional_bias required for bias trade_mode'], 422);
+        }
+
+        $slMax = ($data['hold_policy'] === 'swing' || $data['trade_mode'] === 'bias') ? 80 : 50;
+        $tpMax = ($data['hold_policy'] === 'swing' || $data['trade_mode'] === 'bias') ? 200 : 100;
+        $data['sl_pips'] = min((int) $data['sl_pips'], $slMax);
+        $data['tp_pips'] = min((int) $data['tp_pips'], $tpMax);
 
         if ($data['tp_pips'] < $data['sl_pips']) {
             return response()->json(['message' => 'tp_pips must be >= sl_pips'], 422);
@@ -133,7 +169,6 @@ class TradingWebhookController extends Controller
             'description' => 'Daily plan accepted for '.$data['date'],
         ]);
 
-        // Persist a lightweight review stub for dashboard
         $reviewsDir = base_path('../trading-engine/reports/reviews');
         if (! File::isDirectory($reviewsDir)) {
             File::makeDirectory($reviewsDir, 0755, true);

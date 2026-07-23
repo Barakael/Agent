@@ -54,13 +54,16 @@ class JournalWriter:
                 stake=risk.stake,
                 stop_loss=risk.stop_loss_price,
                 take_profit=risk.take_profit_price,
-                signal_source="rsi_macd_confluence",
+                signal_source=getattr(signal, "strategy_id", None) or "rsi_macd_confluence",
                 rsi_at_entry=signal.rsi,
                 macd_at_entry=signal.macd,
                 contract_id=str(contract_id) if contract_id else None,
                 status="open",
                 mode=mode,
-                reason=signal.reason,
+                reason=(
+                    f"[{getattr(signal, 'trade_mode', 'pattern')}/{getattr(signal, 'hold_policy', 'intraday')}] "
+                    f"{signal.reason}"
+                ),
             )
             session.add(trade)
             session.commit()

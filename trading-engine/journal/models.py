@@ -33,6 +33,10 @@ class TradeJournal(Base):
     status = Column(String(16), default="open")  # open, closed, cancelled
     mode = Column(String(16), default="log_only")
     reason = Column(Text, nullable=True)
+    confidence = Column(Float, nullable=True)
+    market_condition = Column(String(32), nullable=True)
+    score_breakdown = Column(Text, nullable=True)  # JSON
+    sl_tp_method = Column(String(32), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     closed_at = Column(DateTime, nullable=True)
 
@@ -73,6 +77,10 @@ class SignalLog(Base):
     reason = Column(Text, nullable=True)
     risk_decision = Column(String(16), nullable=True)
     risk_reason = Column(Text, nullable=True)
+    strategy_id = Column(String(64), nullable=True)
+    confidence = Column(Float, nullable=True)
+    market_condition = Column(String(32), nullable=True)
+    score_breakdown = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
@@ -96,4 +104,34 @@ def get_engine():
 def init_db() -> sessionmaker:
     engine = get_engine()
     Base.metadata.create_all(engine)
+    # Best-effort migrate new columns on existing SQLite DBs
+    _ensure_columns(engine)
     return sessionmaker(bind=engine)
+
+
+def _ensure_columns(engine) -> None:
+    migrations = [
+        ("trade_journal", "confidence", "FLOAT"),
+        ("trade_journal", "market_condition", "VARCHAR(32)"),
+        ("trade_journal", "score_breakdown", "TEXT"),
+        ("trade_journal", "sl_tp_method", "VARCHAR(32)"),
+        ("signal_logs", "strategy_id", "VARCHAR(64)"),
+        ("signal_logs", "confidence", "FLOAT"),
+        ("signal_logs", "market_condition", "VARCHAR(32)"),
+        ("signal_logs", "score_breakdown", "TEXT"),
+    ]
+    try:
+        with engine.connect() as conn:
+            for table, col, coltype in migrations:
+                try:
+                    conn.execute(
+                        __import__("sqlalchemy").text(
+                            f"ALTER TABLE {table} ADD COLUMN {col} {coltype}"
+                        )
+                    )
+                    conn.commit()
+                except Exception:
+                    pass
+    except Exception:
+        logger = __import__("logging").getLogger(__name__)
+        logger.debug("Column migrate skipped", exc_info=True)

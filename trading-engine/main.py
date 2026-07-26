@@ -168,6 +168,38 @@ async def journal_list(limit: int = 50, offset: int = 0, auth: bool = Depends(va
     return {"data": journal.get_trades(limit=limit, offset=offset)}
 
 
+@app.get("/journal/day-review")
+async def journal_day_review(day: str | None = None, auth: bool = Depends(validate_api_key)):
+    """Structured stats for evening AI learning (no trade authority)."""
+    return {"data": journal.get_day_review_payload(day)}
+
+
+class EveningReviewSaveRequest(BaseModel):
+    date: str
+    markdown: str
+    summary: str = ""
+    best_strategy: str | None = None
+    worst_strategy: str | None = None
+    answers: dict = Field(default_factory=dict)
+    experiments: list[str] = Field(default_factory=list)
+
+
+@app.post("/journal/evening-review")
+async def save_evening_review(body: EveningReviewSaveRequest, auth: bool = Depends(validate_api_key)):
+    """Persist evening learning review markdown under reports/reviews."""
+    from pathlib import Path
+
+    reviews_dir = Path(__file__).resolve().parent / "reports" / "reviews"
+    reviews_dir.mkdir(parents=True, exist_ok=True)
+    path = reviews_dir / f"evening_review_{body.date}.md"
+    header = (
+        f"<!-- evening-review date={body.date} "
+        f"best={body.best_strategy or ''} worst={body.worst_strategy or ''} -->\n\n"
+    )
+    path.write_text(header + body.markdown, encoding="utf-8")
+    return {"status": "ok", "file": path.name, "path": str(path)}
+
+
 @app.get("/metrics")
 async def metrics(auth: bool = Depends(validate_api_key)):
     return {"data": compute_metrics()}
@@ -270,7 +302,7 @@ async def run_backtest(auth: bool = Depends(validate_api_key)):
 class DailyPlanRequest(BaseModel):
     date: str
     pairs: list[str]
-    strategy_id: str = "macd_rsi"
+    strategy_id: str = "momentum"
     enabled_strategies: list[str] | None = None
     trade_mode: str = "pattern"
     directional_bias: str = "neutral"

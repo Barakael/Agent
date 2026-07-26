@@ -19,7 +19,7 @@ from journal.writer import JournalWriter
 from number_engine import NumberEngine
 from plan.store import plan_store
 from plan.schema import DailyPlan
-from risk.gate import RiskDecision, RiskGate
+from risk.gate import RiskDecision, RiskGate, is_synthetic_symbol
 from risk.session import SessionManager
 from signals.engine import SignalEngine
 from strategies import PATTERN_STRATEGY_IDS, evaluate_strategies_detailed
@@ -206,6 +206,8 @@ class TradingBot:
                     return
 
         news_paused, news_reason = self.calendar.is_trading_paused()
+        if is_synthetic_symbol(symbol):
+            news_paused = False
         sl_pips = plan.sl_pips if plan else None
         tp_pips = plan.tp_pips if plan else None
         max_stake = plan.max_stake_usd if plan else None

@@ -13,13 +13,25 @@ from signals.engine import SignalDirection, TradeSignal
 
 logger = logging.getLogger(__name__)
 
-# Pip sizes per symbol (approximate for position sizing)
+# Pip / point sizes per symbol (for fixed-pip fallback and distance stats)
 PIP_SIZE = {
     "frxEURUSD": 0.0001,
     "frxGBPUSD": 0.0001,
     "frxAUDUSD": 0.0001,
     "frxUSDJPY": 0.01,
+    # Synthetic Volatility Indices
+    "R_10": 0.001,
+    "R_25": 0.001,
+    "R_50": 0.01,
+    "R_75": 0.01,
+    "R_100": 0.01,
 }
+
+
+def is_synthetic_symbol(symbol: str) -> bool:
+    """Deriv synthetics ignore macro news and trade 24/7."""
+    s = (symbol or "").upper()
+    return s.startswith("R_") or s.startswith("1HZ")
 
 
 class RiskDecision(str, Enum):

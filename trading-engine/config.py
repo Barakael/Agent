@@ -50,10 +50,11 @@ class Settings(BaseSettings):
     # Trading mode: log_only | demo | live
     TRADING_MODE: str = os.getenv("TRADING_MODE", "log_only")
 
-    # Pairs — Deriv symbols (frx prefix for forex)
+    # Pairs — Deriv symbols
+    # frx* = forex (Mon–Fri only); R_* / 1HZ* = synthetic volatility (24/7)
     TRADING_PAIRS: str = os.getenv(
         "TRADING_PAIRS",
-        "frxEURUSD,frxGBPUSD,frxUSDJPY,frxAUDUSD",
+        "R_10,R_25,R_50,R_75,R_100",
     )
     CANDLE_TIMEFRAME_MINUTES: int = int(os.getenv("CANDLE_TIMEFRAME_MINUTES", "5"))
     CANDLE_BUFFER_SIZE: int = int(os.getenv("CANDLE_BUFFER_SIZE", "200"))
@@ -93,6 +94,8 @@ class Settings(BaseSettings):
     PLAN_MAX_STAKE_USD_CEILING: float = float(os.getenv("PLAN_MAX_STAKE_USD_CEILING", "50"))
 
     # Session — force close all positions before this time (UTC)
+    # SESSION_ENFORCE=false for 24/7 synthetics (no open/close window)
+    SESSION_ENFORCE: bool = os.getenv("SESSION_ENFORCE", "true").lower() == "true"
     SESSION_CLOSE_HOUR_UTC: int = int(os.getenv("SESSION_CLOSE_HOUR_UTC", "21"))
     SESSION_CLOSE_MINUTE_UTC: int = int(os.getenv("SESSION_CLOSE_MINUTE_UTC", "0"))
     SESSION_OPEN_HOUR_UTC: int = int(os.getenv("SESSION_OPEN_HOUR_UTC", "7"))

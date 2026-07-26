@@ -11,14 +11,20 @@ logger = logging.getLogger(__name__)
 
 
 class SessionManager:
-    """Enforce intraday trading; swing positions may hold overnight."""
+    """Enforce intraday trading; swing positions may hold overnight.
+
+    When SESSION_ENFORCE=false (synthetics 24/7), the window is ignored.
+    """
 
     def __init__(self) -> None:
+        self.enforce = settings.SESSION_ENFORCE
         self.open_hour = settings.SESSION_OPEN_HOUR_UTC
         self.close_hour = settings.SESSION_CLOSE_HOUR_UTC
         self.close_minute = settings.SESSION_CLOSE_MINUTE_UTC
 
     def is_session_open(self, now: datetime | None = None) -> bool:
+        if not self.enforce:
+            return True
         now = now or datetime.now(timezone.utc)
         current = now.time()
         open_time = time(self.open_hour, 0)
@@ -29,12 +35,16 @@ class SessionManager:
 
     def must_force_close(self, now: datetime | None = None) -> bool:
         """True when we are at or past session close — close intraday positions."""
+        if not self.enforce:
+            return False
         now = now or datetime.now(timezone.utc)
         close_time = time(self.close_hour, self.close_minute)
         current = now.time()
         return current >= close_time
 
     def seconds_until_close(self, now: datetime | None = None) -> int:
+        if not self.enforce:
+            return -1
         now = now or datetime.now(timezone.utc)
         close_dt = now.replace(
             hour=self.close_hour,
@@ -49,8 +59,11 @@ class SessionManager:
     def session_status(self) -> dict:
         now = datetime.now(timezone.utc)
         return {
+            "session_enforce": self.enforce,
             "session_open": self.is_session_open(now),
             "must_force_close": self.must_force_close(now),
             "seconds_until_close": self.seconds_until_close(now),
-            "close_time_utc": f"{self.close_hour:02d}:{self.close_minute:02d}",
+            "close_time_utc": (
+                "24/7" if not self.enforce else f"{self.close_hour:02d}:{self.close_minute:02d}"
+            ),
         }

@@ -20,7 +20,12 @@ rsync -az --delete \
   --exclude 'frontend/node_modules' \
   --exclude '**/__pycache__' \
   --exclude 'trading-engine/trading_journal.db' \
+  --exclude 'backend/database/database.sqlite' \
+  --exclude 'backend/database/database.sqlite-*' \
   --exclude 'backend/storage/logs/*' \
+  --exclude 'backend/storage/framework/cache/*' \
+  --exclude 'backend/storage/framework/sessions/*' \
+  --exclude 'backend/storage/framework/views/*' \
   --exclude 'backend/.env' \
   --exclude 'trading-engine/.env' \
   --exclude 'ai-agent/.env' \

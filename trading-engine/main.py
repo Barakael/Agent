@@ -47,6 +47,14 @@ async def lifespan(app: FastAPI):
     global bot
     bot = TradingBot()
     journal.update_bot_state("stopped", settings.TRADING_MODE, 0.0)
+    if settings.AUTO_START_BOT:
+        try:
+            await bot.start()
+            logger.info("AUTO_START_BOT: trading loop started")
+        except Exception:
+            logger.exception(
+                "AUTO_START_BOT failed — API is up; call POST /start when ready"
+            )
     yield
     if bot:
         await bot.stop()

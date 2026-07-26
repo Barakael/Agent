@@ -53,6 +53,8 @@ class TradingBot:
         self._running = False
         self._paused = False
         self._task: Optional[asyncio.Task] = None
+        self._feed_task: Optional[asyncio.Task] = None
+        self._subscribed_symbols: set[str] = set()
         self._account_probed = False
         self._account_probe_error: Optional[str] = None
         self.plan_store = plan_store
@@ -127,9 +129,9 @@ class TradingBot:
         if plan and symbol not in plan.pairs:
             return
 
+        # EOD: close intraday positions but keep Number Engine evaluating
         if self.session.must_force_close():
             await self._close_all_positions(force=True, skip_swing=True)
-            return
 
         df = self.aggregator.get_dataframe(symbol)
         snapshot = self.number_engine.compute(symbol, df)
@@ -146,13 +148,17 @@ class TradingBot:
             if plan
             else list(PATTERN_STRATEGY_IDS)
         )
-        armed = self.analysis.armed_strategy_ids
-        if plan and plan.trade_mode == "pattern":
-            pattern_armed = {s for s in armed if s != "bias_swing"}
-            # If gate has not armed any patterns yet, allow planned strategies (demo / cold start)
-            armed_filter = pattern_armed if pattern_armed else None
-        else:
+        # Number Engine mode: Strategy Manager confidence is the filter, not ATAE armed set
+        if settings.NUMBER_ENGINE_EXECUTION:
             armed_filter = None
+        else:
+            armed = self.analysis.armed_strategy_ids
+            if plan and plan.trade_mode == "pattern":
+                pattern_armed = {s for s in armed if s != "bias_swing"}
+                # If gate has not armed any patterns yet, allow planned strategies (demo / cold start)
+                armed_filter = pattern_armed if pattern_armed else None
+            else:
+                armed_filter = None
 
         manager_result = evaluate_strategies_detailed(
             symbol,
@@ -223,15 +229,16 @@ class TradingBot:
             logger.info("Signal rejected %s: %s", symbol, risk_result.reason)
             return
 
-        open_snapshot = self.analysis.evaluate_open(signal, df, risk_result)
-        if not open_snapshot.passed:
-            self.journal.log_signal_rejected(signal, "; ".join(open_snapshot.reasons))
-            logger.info("Analysis rejected open %s: %s", symbol, open_snapshot.reasons)
-            return
+        if not settings.NUMBER_ENGINE_EXECUTION:
+            open_snapshot = self.analysis.evaluate_open(signal, df, risk_result)
+            if not open_snapshot.passed:
+                self.journal.log_signal_rejected(signal, "; ".join(open_snapshot.reasons))
+                logger.info("Analysis rejected open %s: %s", symbol, open_snapshot.reasons)
+                return
 
         if settings.TRADING_MODE == "log_only":
             logger.info(
-                "SIGNAL %s %s @ %.5f conf=%.0f RSI=%.1f — %s [analysis GO]",
+                "SIGNAL %s %s @ %.5f conf=%.0f RSI=%.1f — %s [number_engine]",
                 signal.direction.value,
                 symbol,
                 signal.price,
@@ -250,7 +257,11 @@ class TradingBot:
         if hold != "swing" and not self.session.is_session_open():
             return
 
-        if settings.ANALYSIS_REQUIRE_PREFLIGHT and not self.analysis_armed:
+        if (
+            not settings.NUMBER_ENGINE_EXECUTION
+            and settings.ANALYSIS_REQUIRE_PREFLIGHT
+            and not self.analysis_armed
+        ):
             self.journal.log_signal_rejected(signal, "preflight_not_armed")
             return
 
@@ -275,6 +286,38 @@ class TradingBot:
                 await self._close_all_positions(force=True, skip_swing=True)
                 metrics = compute_metrics()
                 await self.telegram.daily_summary(self.risk.daily_pnl, metrics)
+            await asyncio.sleep(60)
+
+    async def _ensure_symbol_feed(self, symbol: str) -> bool:
+        """Load history + subscribe ticks. Returns True if ticks are live."""
+        try:
+            history = await self.client.get_candles_history(
+                symbol, settings.granularity_seconds, settings.CANDLE_BUFFER_SIZE
+            )
+            self.aggregator.load_historical_candles(symbol, history)
+        except Exception:
+            logger.exception("Failed to load history for %s", symbol)
+        try:
+            await self.client.subscribe_ticks(symbol)
+            self._subscribed_symbols.add(symbol)
+            logger.info("Market feed live for %s", symbol)
+            return True
+        except Exception as exc:
+            msg = str(exc)
+            if "MarketIsClosed" in msg:
+                logger.warning("Market closed for %s — will retry", symbol)
+            else:
+                logger.exception("Failed to subscribe ticks for %s", symbol)
+            self._subscribed_symbols.discard(symbol)
+            return False
+
+    async def _feed_watchdog(self) -> None:
+        """Retry Deriv tick subscriptions when markets reopen (weekend/holiday)."""
+        while self._running:
+            missing = [s for s in self.active_pairs if s not in self._subscribed_symbols]
+            if missing and self.client._ws is not None:
+                for symbol in missing:
+                    await self._ensure_symbol_feed(symbol)
             await asyncio.sleep(60)
 
     async def probe_deriv_account(self) -> None:
@@ -349,30 +392,32 @@ class TradingBot:
         try:
             await self.run_preflight()
         except Exception:
-            logger.exception("Preflight failed on start — bot will not arm")
+            if settings.NUMBER_ENGINE_EXECUTION:
+                logger.exception(
+                    "Preflight failed on start — continuing Number Engine loop anyway"
+                )
+            else:
+                logger.exception("Preflight failed on start — bot will not arm")
 
         if deriv_connected or market_data_only or self.client._ws is not None:
+            self._subscribed_symbols.clear()
             for symbol in self.active_pairs:
-                try:
-                    history = await self.client.get_candles_history(
-                        symbol, settings.granularity_seconds, settings.CANDLE_BUFFER_SIZE
-                    )
-                    self.aggregator.load_historical_candles(symbol, history)
-                    await self.client.subscribe_ticks(symbol)
-                except Exception:
-                    logger.exception("Failed to init symbol %s", symbol)
+                await self._ensure_symbol_feed(symbol)
             self.client.on_tick(self._on_tick)
 
         self._running = True
         self._paused = False
         self.journal.update_bot_state("running", settings.TRADING_MODE, self.risk.daily_pnl)
         self._task = asyncio.create_task(self._session_watchdog())
+        self._feed_task = asyncio.create_task(self._feed_watchdog())
         logger.info(
-            "Trading bot started mode=%s armed=%s deriv=%s pairs=%s",
+            "Trading bot started mode=%s number_engine=%s armed=%s deriv=%s pairs=%s subscribed=%s",
             settings.TRADING_MODE,
+            settings.NUMBER_ENGINE_EXECUTION,
             self.analysis_armed,
             deriv_connected,
             self.active_pairs,
+            sorted(self._subscribed_symbols),
         )
 
     @staticmethod
@@ -393,12 +438,16 @@ class TradingBot:
     async def stop(self) -> None:
         self._running = False
         self.analysis.disarm("bot_stopped")
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+        for task in (self._task, self._feed_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        self._task = None
+        self._feed_task = None
+        self._subscribed_symbols.clear()
         await self.client.disconnect()
         self.journal.update_bot_state("stopped", settings.TRADING_MODE, self.risk.daily_pnl)
 
@@ -419,6 +468,8 @@ class TradingBot:
             "account_type": "demo" if self.client.is_demo else "live",
             "account_error": self._account_probe_error,
             "analysis_armed": self.analysis_armed,
+            "number_engine_execution": settings.NUMBER_ENGINE_EXECUTION,
+            "auto_start_bot": settings.AUTO_START_BOT,
             "armed_strategies": sorted(self.analysis.armed_strategy_ids),
             "strategy_win_rates": self.analysis.strategy_win_rates,
             "preflight": preflight,

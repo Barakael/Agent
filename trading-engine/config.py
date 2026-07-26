@@ -29,12 +29,20 @@ class Settings(BaseSettings):
     # New API: options account id for OTP WebSocket (from REST list accounts)
     DERIV_ACCOUNT_ID: str = os.getenv("DERIV_ACCOUNT_ID", "")
 
-    # Analysis engine (ATAE)
+    # Analysis engine (ATAE) — optional when NUMBER_ENGINE_EXECUTION is on
     ANALYSIS_REQUIRE_PREFLIGHT: bool = os.getenv("ANALYSIS_REQUIRE_PREFLIGHT", "true").lower() == "true"
     ANALYSIS_SCENARIO_WINDOW_BARS: int = int(os.getenv("ANALYSIS_SCENARIO_WINDOW_BARS", "50"))
     ANALYSIS_MIN_SCENARIO_WIN_RATE: float = float(os.getenv("ANALYSIS_MIN_SCENARIO_WIN_RATE", "0.45"))
     ANALYSIS_PREFLIGHT_BACKTEST_BARS: int = int(os.getenv("ANALYSIS_PREFLIGHT_BACKTEST_BARS", "500"))
     ANALYSIS_AI_DECISION_URL: str = os.getenv("ANALYSIS_AI_DECISION_URL", "")
+
+    # Always-on Number Engine: Deriv → NumberEngine → StrategyManager → RiskGate
+    # AUTO_START_BOT: start the bot loop when uvicorn boots (set true on VPS)
+    AUTO_START_BOT: bool = os.getenv("AUTO_START_BOT", "false").lower() == "true"
+    # NUMBER_ENGINE_EXECUTION: skip ATAE evaluate_open / analysis_armed for opens
+    NUMBER_ENGINE_EXECUTION: bool = (
+        os.getenv("NUMBER_ENGINE_EXECUTION", "true").lower() == "true"
+    )
 
     # Block live account unless TRADING_MODE=live
     DERIV_REQUIRE_DEMO: bool = os.getenv("DERIV_REQUIRE_DEMO", "true").lower() == "true"

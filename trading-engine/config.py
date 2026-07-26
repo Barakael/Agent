@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     DERIV_DEMO_LOGINID: str = os.getenv("DERIV_DEMO_LOGINID", "")
     # New API: options account id for OTP WebSocket (from REST list accounts)
     DERIV_ACCOUNT_ID: str = os.getenv("DERIV_ACCOUNT_ID", "")
+    # Multiplier contracts on synthetics — 100 is often invalid; 80 is commonly accepted
+    DERIV_MULTIPLIER: float = float(os.getenv("DERIV_MULTIPLIER", "80"))
 
     # Analysis engine (ATAE) — optional when NUMBER_ENGINE_EXECUTION is on
     ANALYSIS_REQUIRE_PREFLIGHT: bool = os.getenv("ANALYSIS_REQUIRE_PREFLIGHT", "true").lower() == "true"

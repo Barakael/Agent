@@ -22,7 +22,7 @@ Respond with ONLY valid JSON (no markdown) using this schema:
   "risks": ["string", ...],
   "recommended_trade_mode": "pattern" | "bias",
   "pairs": ["frxEURUSD", ...],
-  "enabled_strategies": ["macd_rsi", ...] or ["bias_swing"],
+  "enabled_strategies": ["momentum", "trend_following", ...] or ["bias_swing"],
   "directional_bias": "buy" | "sell" | "neutral",
   "hold_policy": "intraday" | "swing",
   "confidence": 0-100,
@@ -34,6 +34,8 @@ Respond with ONLY valid JSON (no markdown) using this schema:
 }
 
 Rules:
+- Prefer pattern archetypes: trend_following, breakout, range_trading, momentum, price_action.
+- Legacy names macd_rsi/ema_pullback/etc are accepted but prefer new ids.
 - Prefer pattern strategies only when strategy_fitness shows passed=true.
 - If no pattern is armed or headlines/calendar dominate, use trade_mode=bias with a clear directional_bias and swing hold.
 - Stay within allowlisted pairs and risk clamps from the payload.
@@ -100,7 +102,7 @@ def synthesize_daily_analysis(ai_service, payload: Dict[str, Any]) -> Dict[str, 
     if trade_mode == "bias":
         strategies = ["bias_swing"]
     elif not strategies:
-        strategies = ["macd_rsi"]
+        strategies = ["momentum"]
 
     try:
         confidence = int(parsed.get("confidence", 50))

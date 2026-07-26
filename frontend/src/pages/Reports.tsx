@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
-import { FileBarChart2, FileText, Target } from 'lucide-react'
+import { Activity, FileBarChart2, FileText, Target } from 'lucide-react'
 import AppShell from '../components/layout/AppShell'
 import StatCard from '../components/ui/StatCard'
 import SectionCard from '../components/ui/SectionCard'
 import EmptyState from '../components/ui/EmptyState'
 import {
   fetchActivePlan,
+  fetchEveningAiPayload,
   fetchTradingJournal,
   fetchTradingMetrics,
   fetchTradingReviews,
   type DailyPlan,
+  type EveningAiPayload,
   type TradeJournalEntry,
   type TradingMetrics,
   type TradingReview,
@@ -43,12 +45,25 @@ function statusPillClass(status: string) {
   return 'status-pill'
 }
 
+function utcToday(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function topStrategy(payload: EveningAiPayload | null): string {
+  if (!payload) return '—'
+  const entries = Object.entries(payload.by_strategy)
+  if (entries.length === 0) return '—'
+  entries.sort((a, b) => b[1].avg_pnl - a[1].avg_pnl || b[1].trades - a[1].trades)
+  return entries[0][0]
+}
+
 export default function ReportsPage() {
   const [period, setPeriod] = useState<Period>('7d')
   const [metrics, setMetrics] = useState<TradingMetrics | null>(null)
   const [journal, setJournal] = useState<TradeJournalEntry[]>([])
   const [reviews, setReviews] = useState<TradingReview[]>([])
   const [activePlan, setActivePlan] = useState<DailyPlan | null>(null)
+  const [dayAgg, setDayAgg] = useState<EveningAiPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -60,16 +75,18 @@ export default function ReportsPage() {
     setLoading(true)
     setError('')
     try {
-      const [m, j, planResp, reviewsResp] = await Promise.all([
+      const [m, j, planResp, reviewsResp, agg] = await Promise.all([
         fetchTradingMetrics(),
         fetchTradingJournal(100),
         fetchActivePlan().catch(() => ({ data: null })),
         fetchTradingReviews().catch(() => ({ reviews: [], latest_ai_decision: null })),
+        fetchEveningAiPayload(utcToday()).catch(() => null),
       ])
       setMetrics(m)
       setJournal(j)
       setActivePlan(planResp.data)
       setReviews(reviewsResp.reviews ?? [])
+      setDayAgg(agg)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load reports')
     } finally {
@@ -99,6 +116,13 @@ export default function ReportsPage() {
   }, [reviews, period])
 
   const latestReview = filteredReviews[0] ?? reviews[0] ?? null
+  const summary = dayAgg?.summary
+  const strategyRows = Object.entries(dayAgg?.by_strategy ?? {}).sort(
+    (a, b) => b[1].trades - a[1].trades,
+  )
+  const regimeRows = Object.entries(dayAgg?.by_regime ?? {}).sort((a, b) => b[1].trades - a[1].trades)
+  const hourRows = Object.entries(dayAgg?.by_hour_utc ?? {}).sort((a, b) => a[0].localeCompare(b[0]))
+  const maxHourTrades = Math.max(1, ...hourRows.map(([, b]) => b.trades))
 
   const downloadReview = (review: TradingReview) => {
     const blob = new Blob([review.content], { type: 'text/markdown;charset=utf-8' })
@@ -124,7 +148,7 @@ export default function ReportsPage() {
             Trading reports
           </h1>
           <p className="mt-0.5 text-sm text-[color:var(--wayda-muted)]">
-            Journal, reviews, and metrics from the trading engine.
+            Engine metrics, privacy-safe session analysis, journal, and reviews.
           </p>
         </div>
         <div className="flex gap-1 rounded-lg border border-[color:var(--wayda-border)] p-1 dark:border-slate-700">
@@ -161,6 +185,125 @@ export default function ReportsPage() {
           tone="danger"
         />
       </section>
+
+      <SectionCard title="Today’s session analysis" icon={Activity} className="mb-4">
+        <p className="mb-3 text-xs text-[color:var(--wayda-muted)]">
+          Privacy-safe aggregates for {dayAgg?.date ?? utcToday()} (no prices or account details). Top strategy:{' '}
+          <span className="font-medium text-[color:var(--wayda-ink)] dark:text-slate-100">{topStrategy(dayAgg)}</span>
+        </p>
+        <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+          <StatCard label="Closed today" value={summary?.trades_closed ?? (loading ? '…' : 0)} />
+          <StatCard
+            label="Win rate"
+            value={summary != null ? `${summary.win_rate_pct}%` : loading ? '…' : '—'}
+            tone="accent"
+          />
+          <StatCard
+            label="Avg PnL / trade"
+            value={summary != null ? `$${summary.avg_pnl_per_trade}` : loading ? '…' : '—'}
+            tone={summary && summary.avg_pnl_per_trade < 0 ? 'danger' : summary && summary.avg_pnl_per_trade > 0 ? 'success' : 'default'}
+          />
+          <StatCard label="Skips" value={summary?.skips ?? (loading ? '…' : 0)} helper={`${summary?.risk_rejects ?? 0} risk rejects`} />
+          <StatCard
+            label="Avg confidence"
+            value={summary?.avg_confidence != null ? summary.avg_confidence : loading ? '…' : '—'}
+          />
+          <StatCard
+            label="Avg SL / TP pips"
+            value={
+              summary?.avg_sl_distance_pips != null || summary?.avg_tp_distance_pips != null
+                ? `${summary?.avg_sl_distance_pips ?? '—'} / ${summary?.avg_tp_distance_pips ?? '—'}`
+                : loading
+                  ? '…'
+                  : '—'
+            }
+          />
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-3">
+          <div className="overflow-x-auto lg:col-span-1">
+            <p className="mb-1 text-xs font-medium text-[color:var(--wayda-muted)]">By strategy</p>
+            {strategyRows.length === 0 ? (
+              <p className="text-xs text-[color:var(--wayda-muted)]">No closed trades today.</p>
+            ) : (
+              <table className="report-table text-xs">
+                <thead>
+                  <tr>
+                    <th>Strategy</th>
+                    <th>Trades</th>
+                    <th>Win %</th>
+                    <th>Avg PnL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {strategyRows.map(([sid, row]) => (
+                    <tr key={sid}>
+                      <td>{sid}</td>
+                      <td className="font-mono-metric">{row.trades}</td>
+                      <td className="font-mono-metric">{row.win_rate_pct}%</td>
+                      <td className="font-mono-metric">${row.avg_pnl}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div className="overflow-x-auto lg:col-span-1">
+            <p className="mb-1 text-xs font-medium text-[color:var(--wayda-muted)]">By regime</p>
+            {regimeRows.length === 0 ? (
+              <p className="text-xs text-[color:var(--wayda-muted)]">No regime data yet.</p>
+            ) : (
+              <table className="report-table text-xs">
+                <thead>
+                  <tr>
+                    <th>Regime</th>
+                    <th>Trades</th>
+                    <th>Win %</th>
+                    <th>Avg PnL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {regimeRows.map(([regime, row]) => (
+                    <tr key={regime}>
+                      <td>{regime}</td>
+                      <td className="font-mono-metric">{row.trades}</td>
+                      <td className="font-mono-metric">{row.win_rate_pct}%</td>
+                      <td className="font-mono-metric">${row.avg_pnl}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div className="lg:col-span-1">
+            <p className="mb-1 text-xs font-medium text-[color:var(--wayda-muted)]">By hour (UTC)</p>
+            {hourRows.length === 0 ? (
+              <p className="text-xs text-[color:var(--wayda-muted)]">No hourly activity yet.</p>
+            ) : (
+              <ul className="space-y-2">
+                {hourRows.map(([hour, row]) => (
+                  <li key={hour} className="text-xs">
+                    <div className="mb-0.5 flex justify-between gap-2">
+                      <span className="font-mono-metric">{hour}:00</span>
+                      <span className="text-[color:var(--wayda-muted)]">
+                        {row.trades} · {row.win_rate_pct}%
+                      </span>
+                    </div>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-[color:var(--wayda-border)] dark:bg-slate-700">
+                      <div
+                        className="h-full rounded-full bg-[color:var(--wayda-copper)]"
+                        style={{ width: `${Math.max(8, (row.trades / maxHourTrades) * 100)}%` }}
+                      />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      </SectionCard>
 
       <section className="mb-4 grid gap-4 lg:grid-cols-2">
         <SectionCard title="Active plan" icon={Target}>
@@ -205,7 +348,7 @@ export default function ReportsPage() {
         </SectionCard>
 
         <SectionCard
-          title="Latest review"
+          title="Narrative review"
           icon={FileText}
           action={
             latestReview ? (
@@ -243,10 +386,12 @@ export default function ReportsPage() {
                   <th>When</th>
                   <th>Symbol</th>
                   <th>Dir</th>
+                  <th>Strategy</th>
+                  <th>Conf</th>
+                  <th>Regime</th>
                   <th>Stake</th>
                   <th>P&L</th>
                   <th>Status</th>
-                  <th>Mode</th>
                 </tr>
               </thead>
               <tbody>
@@ -257,12 +402,14 @@ export default function ReportsPage() {
                     </td>
                     <td>{t.symbol}</td>
                     <td className="uppercase">{t.direction}</td>
+                    <td className="text-xs">{t.signal_source ?? '—'}</td>
+                    <td className="font-mono-metric">{t.confidence != null ? t.confidence : '—'}</td>
+                    <td className="text-xs">{t.market_condition ?? '—'}</td>
                     <td className="font-mono-metric">${t.stake}</td>
                     <td className="font-mono-metric">{t.pnl != null ? `$${t.pnl}` : '—'}</td>
                     <td>
                       <span className={statusPillClass(t.status)}>{t.status}</span>
                     </td>
-                    <td>{t.mode}</td>
                   </tr>
                 ))}
               </tbody>

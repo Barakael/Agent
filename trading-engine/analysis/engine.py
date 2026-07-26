@@ -174,7 +174,7 @@ class AnalysisEngine:
             else:
                 # Fall back to primary pair backtest shape when no extra history
                 res = next(iter(backtest.values()), {"win_rate": 0, "total_trades": 0, "passed": False})
-                if sid != "macd_rsi":
+                if sid != "momentum":
                     res = {"win_rate": 0, "total_trades": 0, "passed": False, "note": "no_history"}
             wr = float(res.get("win_rate") or 0) / (100.0 if float(res.get("win_rate") or 0) > 1 else 1.0)
             # runner returns win_rate as percent (0-100)

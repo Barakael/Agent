@@ -297,9 +297,12 @@ export default function TradingPage() {
           )}
         </SectionCard>
         <SectionCard title="Latest review" icon={BookOpen}>
-          <p className="mb-3 text-xs text-[color:var(--wayda-muted)]">Automation / daily analysis notes.</p>
+          <p className="mb-3 text-xs text-[color:var(--wayda-muted)]">
+            Evening learning reviews and daily plan notes (AI does not trade).
+          </p>
           {latestReview ? (
             <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-[color:var(--wayda-border)] bg-white/60 p-2 text-xs dark:border-slate-700 dark:bg-slate-900/50">
+              {latestReview.kind === 'evening' ? '[Evening] ' : ''}
               {latestReview.content.slice(0, 2000)}
             </pre>
           ) : aiDecision?.summary ? (

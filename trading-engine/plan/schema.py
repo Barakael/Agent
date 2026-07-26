@@ -8,10 +8,12 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from config import settings
-from strategies import ALL_STRATEGY_IDS, PATTERN_STRATEGY_IDS
+from strategies import ALL_STRATEGY_IDS, PATTERN_STRATEGY_IDS, STRATEGY_ALIASES, resolve_strategy_id
 
-ALLOWED_STRATEGIES = set(ALL_STRATEGY_IDS)
-ALLOWED_PATTERN_STRATEGIES = set(PATTERN_STRATEGY_IDS)
+ALLOWED_STRATEGIES = set(ALL_STRATEGY_IDS) | set(STRATEGY_ALIASES.keys())
+ALLOWED_PATTERN_STRATEGIES = set(PATTERN_STRATEGY_IDS) | {
+    k for k, v in STRATEGY_ALIASES.items() if v in PATTERN_STRATEGY_IDS
+}
 SL_MIN, SL_MAX = 5, 50
 TP_MIN, TP_MAX = 10, 100
 SWING_SL_MAX = 80
@@ -29,8 +31,8 @@ def _stake_ceiling() -> float:
 class DailyPlan(BaseModel):
     date: str = Field(..., description="UTC date YYYY-MM-DD")
     pairs: list[str] = Field(..., min_length=1)
-    strategy_id: str = "macd_rsi"
-    enabled_strategies: list[str] = Field(default_factory=lambda: ["macd_rsi"])
+    strategy_id: str = "momentum"
+    enabled_strategies: list[str] = Field(default_factory=lambda: ["momentum", "trend_following", "range_trading", "breakout", "price_action"])
     trade_mode: str = "pattern"  # pattern | bias
     directional_bias: str = "neutral"  # buy | sell | neutral
     hold_policy: str = "intraday"  # intraday | swing
@@ -76,22 +78,30 @@ class DailyPlan(BaseModel):
     @field_validator("strategy_id")
     @classmethod
     def validate_strategy(cls, v: str) -> str:
-        if v not in ALLOWED_STRATEGIES:
+        v = resolve_strategy_id(v)
+        if v not in ALLOWED_STRATEGIES and v not in set(ALL_STRATEGY_IDS):
             raise ValueError(f"strategy_id must be one of {sorted(ALLOWED_STRATEGIES)}")
         return v
 
     @field_validator("enabled_strategies")
     @classmethod
     def validate_enabled(cls, v: list[str]) -> list[str]:
-        cleaned = [s.strip() for s in v if s and s.strip()]
+        cleaned = [resolve_strategy_id(s.strip()) for s in v if s and s.strip()]
         if not cleaned:
-            cleaned = ["macd_rsi"]
+            cleaned = ["momentum"]
         bad = [s for s in cleaned if s not in ALLOWED_PATTERN_STRATEGIES and s != "bias_swing"]
         if bad:
             raise ValueError(f"unknown strategies: {bad}")
-        if len(cleaned) > 5:
-            cleaned = cleaned[:5]
-        return cleaned
+        # Deduplicate
+        seen: set[str] = set()
+        uniq: list[str] = []
+        for s in cleaned:
+            if s not in seen:
+                seen.add(s)
+                uniq.append(s)
+        if len(uniq) > 5:
+            uniq = uniq[:5]
+        return uniq
 
     @field_validator("pairs")
     @classmethod
@@ -135,7 +145,7 @@ class DailyPlan(BaseModel):
             object.__setattr__(
                 self,
                 "enabled_strategies",
-                [s for s in self.enabled_strategies if s != "bias_swing"] or ["macd_rsi"],
+                [s for s in self.enabled_strategies if s != "bias_swing"] or ["momentum"],
             )
         if self.strategy_id not in self.enabled_strategies and self.trade_mode == "pattern":
             # keep primary strategy_id as first enabled

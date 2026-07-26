@@ -10,4 +10,5 @@ Artisan::command('inspire', function () {
 
 Schedule::command('trading:preflight')->dailyAt('06:45')->timezone('UTC');
 Schedule::command('trading:daily-analysis')->dailyAt('06:50')->timezone('UTC');
+Schedule::command('trading:evening-review')->dailyAt('21:30')->timezone('UTC');
 

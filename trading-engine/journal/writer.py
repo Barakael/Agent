@@ -241,7 +241,7 @@ class JournalWriter:
             return [self._trade_row(r) for r in rows]
 
     def get_day_review_payload(self, day: Optional[str] = None) -> dict:
-        """Aggregate closed trades + skips for evening AI review."""
+        """Internal/debug day review (may include row-level detail). Not for OpenAI."""
         day = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         start = datetime.fromisoformat(f"{day}T00:00:00+00:00")
         end = datetime.fromisoformat(f"{day}T23:59:59.999999+00:00")
@@ -317,6 +317,100 @@ class JournalWriter:
                 }
                 for s in rejects[:50]
             ],
+        }
+
+    def get_evening_ai_payload(self, day: Optional[str] = None) -> dict:
+        """Privacy-safe aggregates for OpenAI — no prices, stakes, contracts, or reasons."""
+        day = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        start = datetime.fromisoformat(f"{day}T00:00:00+00:00")
+        end = datetime.fromisoformat(f"{day}T23:59:59.999999+00:00")
+        with self.Session() as session:
+            trades = (
+                session.query(TradeJournal)
+                .filter(TradeJournal.created_at >= start, TradeJournal.created_at <= end)
+                .all()
+            )
+            signals = (
+                session.query(SignalLog)
+                .filter(SignalLog.created_at >= start, SignalLog.created_at <= end)
+                .all()
+            )
+
+        closed = [t for t in trades if t.status == "closed"]
+        skips = [
+            s
+            for s in signals
+            if (s.risk_decision or "") == "skipped" or (s.reason or "").startswith("NO_TRADE")
+        ]
+        rejects = [s for s in signals if s.risk_decision == "rejected"]
+
+        def _pip(symbol: str) -> float:
+            return 0.01 if "JPY" in (symbol or "").upper() else 0.0001
+
+        def _bucket_stats(rows: list) -> dict:
+            n = len(rows)
+            if n == 0:
+                return {"trades": 0, "win_rate_pct": 0.0, "avg_pnl": 0.0}
+            wins = sum(1 for t in rows if (t.pnl or 0) > 0)
+            avg_pnl = sum(float(t.pnl or 0) for t in rows) / n
+            return {
+                "trades": n,
+                "win_rate_pct": round(100.0 * wins / n, 1),
+                "avg_pnl": round(avg_pnl, 2),
+            }
+
+        by_strategy: dict[str, list] = {}
+        by_regime: dict[str, list] = {}
+        by_hour: dict[str, list] = {}
+        confidences: list[float] = []
+        sl_pips: list[float] = []
+        tp_pips: list[float] = []
+
+        for t in closed:
+            sid = t.signal_source or "unknown"
+            by_strategy.setdefault(sid, []).append(t)
+            regime = t.market_condition or "unknown"
+            by_regime.setdefault(regime, []).append(t)
+            ts = t.created_at
+            if ts is not None:
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                hour = ts.astimezone(timezone.utc).strftime("%H")
+                by_hour.setdefault(hour, []).append(t)
+            if getattr(t, "confidence", None) is not None:
+                confidences.append(float(t.confidence))
+            pip = _pip(t.symbol)
+            if t.entry_price and t.stop_loss:
+                sl_pips.append(abs(float(t.entry_price) - float(t.stop_loss)) / pip)
+            if t.entry_price and t.take_profit:
+                tp_pips.append(abs(float(t.take_profit) - float(t.entry_price)) / pip)
+
+        # Also fold signal confidence when trade confidence missing
+        if not confidences:
+            for s in signals:
+                if s.confidence is not None and s.direction != "none":
+                    confidences.append(float(s.confidence))
+
+        n_closed = len(closed)
+        wins = sum(1 for t in closed if (t.pnl or 0) > 0)
+        total_pnl = sum(float(t.pnl or 0) for t in closed)
+
+        return {
+            "date": day,
+            "summary": {
+                "trades_opened": len(trades),
+                "trades_closed": n_closed,
+                "win_rate_pct": round(100.0 * wins / n_closed, 1) if n_closed else 0.0,
+                "avg_pnl_per_trade": round(total_pnl / n_closed, 2) if n_closed else 0.0,
+                "skips": len(skips),
+                "risk_rejects": len(rejects),
+                "avg_confidence": round(sum(confidences) / len(confidences), 1) if confidences else None,
+                "avg_sl_distance_pips": round(sum(sl_pips) / len(sl_pips), 1) if sl_pips else None,
+                "avg_tp_distance_pips": round(sum(tp_pips) / len(tp_pips), 1) if tp_pips else None,
+            },
+            "by_strategy": {k: _bucket_stats(v) for k, v in sorted(by_strategy.items())},
+            "by_regime": {k: _bucket_stats(v) for k, v in sorted(by_regime.items())},
+            "by_hour_utc": {k: _bucket_stats(v) for k, v in sorted(by_hour.items())},
         }
 
     @staticmethod

@@ -62,7 +62,7 @@ class BacktestRunner:
         self,
         symbol: str,
         df: pd.DataFrame,
-        strategy_id: str = "macd_rsi",
+        strategy_id: str = "momentum",
     ) -> BacktestResult:
         result = BacktestResult()
         balance = self.initial_balance

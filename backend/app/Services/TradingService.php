@@ -170,6 +170,11 @@ class TradingService
         return $this->request('GET', '/analysis/sources');
     }
 
+    public function getAnalysisSnapshots(): array
+    {
+        return $this->request('GET', '/analysis/snapshots');
+    }
+
     public function getMarketBrief(): array
     {
         $http = Http::withHeaders($this->getHeaders())->timeout(max($this->timeout, 90));

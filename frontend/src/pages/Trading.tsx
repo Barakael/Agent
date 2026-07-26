@@ -9,6 +9,7 @@ import {
   closePosition,
   fetchActivePlan,
   fetchAnalysisDecision,
+  fetchEveningAiPayload,
   fetchTradingJournal,
   fetchTradingMetrics,
   fetchTradingPositions,
@@ -22,6 +23,7 @@ import {
   startTradingBot,
   type AnalysisDecision,
   type DailyPlan,
+  type EveningAiPayload,
   type PreflightSnapshot,
   type TradeJournalEntry,
   type TradingMetrics,
@@ -31,6 +33,14 @@ import {
 } from '../services/tradingService'
 
 const PAIRS = ['frxEURUSD', 'frxGBPUSD', 'frxUSDJPY', 'frxAUDUSD']
+
+function topStrategyFromAgg(payload: EveningAiPayload | null): string {
+  if (!payload) return '—'
+  const entries = Object.entries(payload.by_strategy)
+  if (entries.length === 0) return '—'
+  entries.sort((a, b) => b[1].avg_pnl - a[1].avg_pnl || b[1].trades - a[1].trades)
+  return entries[0][0]
+}
 
 export default function TradingPage() {
   const [status, setStatus] = useState<TradingStatus | null>(null)
@@ -43,6 +53,7 @@ export default function TradingPage() {
   const [aiDecision, setAiDecision] = useState<AnalysisDecision | null>(null)
   const [activePlan, setActivePlan] = useState<DailyPlan | null>(null)
   const [latestReview, setLatestReview] = useState<TradingReview | null>(null)
+  const [dayAgg, setDayAgg] = useState<EveningAiPayload | null>(null)
   const [preflightRunning, setPreflightRunning] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -56,7 +67,7 @@ export default function TradingPage() {
   const refresh = useCallback(async () => {
     try {
       setError('')
-      const [s, p, j, m, ai, planResp, reviewsResp] = await Promise.all([
+      const [s, p, j, m, ai, planResp, reviewsResp, agg] = await Promise.all([
         fetchTradingStatus(),
         fetchTradingPositions(),
         fetchTradingJournal(),
@@ -64,6 +75,7 @@ export default function TradingPage() {
         fetchAnalysisDecision(),
         fetchActivePlan().catch(() => ({ data: null })),
         fetchTradingReviews().catch(() => ({ reviews: [], latest_ai_decision: null })),
+        fetchEveningAiPayload().catch(() => null),
       ])
       setStatus(s)
       setPositions(p)
@@ -75,6 +87,7 @@ export default function TradingPage() {
       setAiDecision(ai)
       setActivePlan(planResp.data ?? s.active_plan ?? null)
       setLatestReview(reviewsResp.reviews?.[0] ?? null)
+      setDayAgg(agg)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load trading data')
     } finally {
@@ -228,6 +241,23 @@ export default function TradingPage() {
         {aiDecision?.summary ? (
           <p className="mt-3 text-xs text-[color:var(--wayda-muted)]">{aiDecision.summary}</p>
         ) : null}
+      </SectionCard>
+
+      <SectionCard title="Session analysis" icon={Activity} className="mb-4">
+        <p className="mb-3 text-xs text-[color:var(--wayda-muted)]">
+          Privacy-safe day aggregates from the journal (no OpenAI required).
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <StatCard label="Armed" value={analysisArmed ? 'Yes' : 'No'} tone={analysisArmed ? 'success' : 'danger'} />
+          <StatCard
+            label="Win rate today"
+            value={dayAgg ? `${dayAgg.summary.win_rate_pct}%` : '—'}
+            tone="accent"
+          />
+          <StatCard label="Skips" value={dayAgg?.summary.skips ?? '—'} helper={`${dayAgg?.summary.risk_rejects ?? 0} rejects`} />
+          <StatCard label="Closed today" value={dayAgg?.summary.trades_closed ?? '—'} />
+          <StatCard label="Top strategy" value={topStrategyFromAgg(dayAgg)} />
+        </div>
       </SectionCard>
 
       <section className="mb-4 grid gap-4 lg:grid-cols-2">
@@ -450,10 +480,12 @@ export default function TradingPage() {
                 <tr>
                   <th>Symbol</th>
                   <th>Dir</th>
+                  <th>Strategy</th>
+                  <th>Conf</th>
+                  <th>Regime</th>
                   <th>Entry</th>
                   <th>P&L</th>
                   <th>Status</th>
-                  <th>Mode</th>
                 </tr>
               </thead>
               <tbody>
@@ -461,12 +493,14 @@ export default function TradingPage() {
                   <tr key={t.id}>
                     <td>{t.symbol}</td>
                     <td className="uppercase">{t.direction}</td>
+                    <td className="text-xs">{t.signal_source ?? '—'}</td>
+                    <td className="font-mono-metric">{t.confidence != null ? t.confidence : '—'}</td>
+                    <td className="text-xs">{t.market_condition ?? '—'}</td>
                     <td className="font-mono-metric">{t.entry_price}</td>
                     <td className="font-mono-metric">{t.pnl ?? '—'}</td>
                     <td>
                       <span className="status-pill">{t.status}</span>
                     </td>
-                    <td>{t.mode}</td>
                   </tr>
                 ))}
               </tbody>

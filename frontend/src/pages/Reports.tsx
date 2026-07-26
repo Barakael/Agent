@@ -218,6 +218,7 @@ export default function ReportsPage() {
           {latestReview ? (
             <>
               <p className="mb-2 text-xs text-[color:var(--wayda-muted)]">
+                {latestReview.kind === 'evening' ? 'Evening learning · ' : 'Plan review · '}
                 {latestReview.file}
                 {latestReview.date ? ` · ${latestReview.date}` : ''}
               </p>

@@ -58,11 +58,20 @@ class Settings(BaseSettings):
     MACD_SLOW: int = int(os.getenv("MACD_SLOW", "26"))
     MACD_SIGNAL: int = int(os.getenv("MACD_SIGNAL", "9"))
 
+    # Strategy Manager
+    STRATEGY_CONFIDENCE_THRESHOLD: float = float(
+        os.getenv("STRATEGY_CONFIDENCE_THRESHOLD", "70")
+    )
+    ATR_SL_MULTIPLIER: float = float(os.getenv("ATR_SL_MULTIPLIER", "1.5"))
+    DEFAULT_RR_RATIO: float = float(os.getenv("DEFAULT_RR_RATIO", "2.0"))
+
     # Risk (moderate profile)
     RISK_PERCENT_PER_TRADE: float = float(os.getenv("RISK_PERCENT_PER_TRADE", "1.5"))
     DAILY_DRAWDOWN_LIMIT_PERCENT: float = float(
         os.getenv("DAILY_DRAWDOWN_LIMIT_PERCENT", "4.0")
     )
+    MAX_DAILY_PROFIT_PERCENT: float = float(os.getenv("MAX_DAILY_PROFIT_PERCENT", "8.0"))
+    MAX_TRADES_PER_DAY: int = int(os.getenv("MAX_TRADES_PER_DAY", "20"))
     DEFAULT_SL_PIPS: int = int(os.getenv("DEFAULT_SL_PIPS", "15"))
     DEFAULT_TP_PIPS: int = int(os.getenv("DEFAULT_TP_PIPS", "30"))
     TRAILING_STOP_ENABLED: bool = os.getenv("TRAILING_STOP_ENABLED", "false").lower() == "true"

@@ -360,7 +360,9 @@ class DerivWebSocketClient:
         }
         is_multiplier = contract_type in {"MULTUP", "MULTDOWN"} or multiplier is not None
         if is_multiplier:
-            proposal_payload["multiplier"] = float(multiplier or 100)
+            proposal_payload["multiplier"] = float(
+                multiplier if multiplier is not None else settings.DERIV_MULTIPLIER
+            )
         else:
             proposal_payload["duration"] = duration
             proposal_payload["duration_unit"] = duration_unit
@@ -375,7 +377,40 @@ class DerivWebSocketClient:
 
         proposal_resp = await self._send(proposal_payload)
         if "error" in proposal_resp:
-            raise RuntimeError(f"Proposal failed: {proposal_resp['error']}")
+            err = proposal_resp["error"]
+            # Retry once with lowest allowed multiplier when Deriv rejects our value
+            if (
+                is_multiplier
+                and isinstance(err, dict)
+                and err.get("subcode") == "MultiplierOutOfRange"
+                and err.get("code_args")
+            ):
+                raw = err["code_args"]
+                if isinstance(raw, list) and raw:
+                    allowed_str = str(raw[0])
+                else:
+                    allowed_str = str(raw)
+                allowed = []
+                for part in allowed_str.replace(" ", "").split(","):
+                    try:
+                        allowed.append(float(part))
+                    except ValueError:
+                        continue
+                if allowed:
+                    retry_mult = min(allowed)
+                    logger.warning(
+                        "Multiplier %s rejected for %s — retrying with %s (allowed %s)",
+                        proposal_payload.get("multiplier"),
+                        symbol,
+                        retry_mult,
+                        allowed_str,
+                    )
+                    proposal_payload["multiplier"] = retry_mult
+                    proposal_resp = await self._send(proposal_payload)
+                    if "error" not in proposal_resp:
+                        err = None
+            if "error" in proposal_resp:
+                raise RuntimeError(f"Proposal failed: {proposal_resp['error']}")
         proposal = proposal_resp.get("proposal", {})
         proposal_id = proposal.get("id")
         if not proposal_id:

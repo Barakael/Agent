@@ -170,8 +170,14 @@ async def journal_list(limit: int = 50, offset: int = 0, auth: bool = Depends(va
 
 @app.get("/journal/day-review")
 async def journal_day_review(day: str | None = None, auth: bool = Depends(validate_api_key)):
-    """Structured stats for evening AI learning (no trade authority)."""
+    """Internal/debug day stats (may include row detail). Not for OpenAI."""
     return {"data": journal.get_day_review_payload(day)}
+
+
+@app.get("/journal/evening-ai-payload")
+async def journal_evening_ai_payload(day: str | None = None, auth: bool = Depends(validate_api_key)):
+    """Privacy-safe aggregates only — safe to send to OpenAI evening review."""
+    return {"data": journal.get_evening_ai_payload(day)}
 
 
 class EveningReviewSaveRequest(BaseModel):

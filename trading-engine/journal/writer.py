@@ -34,6 +34,55 @@ class JournalWriter:
                 reason=signal.reason,
                 risk_decision=risk.decision.value if risk else None,
                 risk_reason=risk.reason if risk else None,
+                strategy_id=getattr(signal, "strategy_id", None),
+                confidence=getattr(signal, "confidence", None),
+                market_condition=getattr(signal, "market_condition", None),
+                score_breakdown=json.dumps(getattr(signal, "score_breakdown", None) or {}),
+            )
+            session.add(entry)
+            session.commit()
+            return entry.id
+
+    def log_no_trade(
+        self,
+        symbol: str,
+        price: float,
+        epoch: int,
+        regime: str,
+        reason: str,
+        evaluations: Optional[list] = None,
+        rsi: float = 0.0,
+        macd: float = 0.0,
+    ) -> int:
+        """Log intentional No Trade / skip so Phase 3 can analyse missed setups."""
+        with self.Session() as session:
+            breakdown = {}
+            if evaluations:
+                breakdown = {
+                    "evaluations": [
+                        {
+                            "strategy_id": getattr(e, "strategy_id", None),
+                            "direction": getattr(getattr(e, "direction", None), "value", str(getattr(e, "direction", ""))),
+                            "confidence": getattr(e, "confidence", 0),
+                            "reasons": getattr(e, "reasons", []),
+                        }
+                        for e in evaluations
+                    ]
+                }
+            entry = SignalLog(
+                symbol=symbol,
+                direction="none",
+                rsi=rsi,
+                macd=macd,
+                price=price,
+                epoch=epoch,
+                reason=f"NO_TRADE: {reason}",
+                risk_decision="skipped",
+                risk_reason=reason,
+                strategy_id=None,
+                confidence=0.0,
+                market_condition=regime,
+                score_breakdown=json.dumps(breakdown),
             )
             session.add(entry)
             session.commit()
@@ -64,6 +113,11 @@ class JournalWriter:
                     f"[{getattr(signal, 'trade_mode', 'pattern')}/{getattr(signal, 'hold_policy', 'intraday')}] "
                     f"{signal.reason}"
                 ),
+                confidence=getattr(signal, "confidence", None),
+                market_condition=getattr(signal, "market_condition", None),
+                score_breakdown=json.dumps(getattr(signal, "score_breakdown", None) or {}),
+                sl_tp_method=getattr(risk, "sl_tp_method", None)
+                or getattr(signal, "sl_tp_method", None),
             )
             session.add(trade)
             session.commit()
@@ -81,6 +135,10 @@ class JournalWriter:
                 reason=f"REJECTED: {reason} | {signal.reason}",
                 risk_decision="rejected",
                 risk_reason=reason,
+                strategy_id=getattr(signal, "strategy_id", None),
+                confidence=getattr(signal, "confidence", None),
+                market_condition=getattr(signal, "market_condition", None),
+                score_breakdown=json.dumps(getattr(signal, "score_breakdown", None) or {}),
             )
             session.add(entry)
             session.commit()
@@ -180,21 +238,113 @@ class JournalWriter:
                 .limit(limit)
                 .all()
             )
-            return [
+            return [self._trade_row(r) for r in rows]
+
+    def get_day_review_payload(self, day: Optional[str] = None) -> dict:
+        """Aggregate closed trades + skips for evening AI review."""
+        day = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        start = datetime.fromisoformat(f"{day}T00:00:00+00:00")
+        end = datetime.fromisoformat(f"{day}T23:59:59.999999+00:00")
+        with self.Session() as session:
+            trades = (
+                session.query(TradeJournal)
+                .filter(TradeJournal.created_at >= start, TradeJournal.created_at <= end)
+                .all()
+            )
+            signals = (
+                session.query(SignalLog)
+                .filter(SignalLog.created_at >= start, SignalLog.created_at <= end)
+                .all()
+            )
+
+        closed = [t for t in trades if t.status == "closed"]
+        by_strategy: dict[str, dict] = {}
+        by_regime: dict[str, dict] = {}
+        for t in closed:
+            sid = t.signal_source or "unknown"
+            bucket = by_strategy.setdefault(sid, {"trades": 0, "wins": 0, "pnl": 0.0, "losses": 0})
+            bucket["trades"] += 1
+            bucket["pnl"] += float(t.pnl or 0)
+            if (t.pnl or 0) > 0:
+                bucket["wins"] += 1
+            elif (t.pnl or 0) < 0:
+                bucket["losses"] += 1
+
+            regime = t.market_condition or "unknown"
+            rb = by_regime.setdefault(regime, {"trades": 0, "pnl": 0.0})
+            rb["trades"] += 1
+            rb["pnl"] += float(t.pnl or 0)
+
+        skips = [s for s in signals if (s.risk_decision or "") in ("skipped",) or (s.reason or "").startswith("NO_TRADE")]
+        rejects = [s for s in signals if s.risk_decision == "rejected"]
+
+        sl_distances = []
+        for t in closed:
+            if t.entry_price and t.stop_loss:
+                sl_distances.append(abs(t.entry_price - t.stop_loss))
+
+        return {
+            "date": day,
+            "summary": {
+                "trades_opened": len(trades),
+                "trades_closed": len(closed),
+                "total_pnl": round(sum(float(t.pnl or 0) for t in closed), 2),
+                "wins": sum(1 for t in closed if (t.pnl or 0) > 0),
+                "losses": sum(1 for t in closed if (t.pnl or 0) < 0),
+                "skips": len(skips),
+                "risk_rejects": len(rejects),
+                "avg_sl_distance": round(sum(sl_distances) / len(sl_distances), 6) if sl_distances else None,
+            },
+            "by_strategy": by_strategy,
+            "by_regime": by_regime,
+            "trades": [self._trade_row(t) for t in trades],
+            "skips": [
                 {
-                    "id": r.id,
-                    "symbol": r.symbol,
-                    "direction": r.direction,
-                    "entry_price": r.entry_price,
-                    "exit_price": r.exit_price,
-                    "stake": r.stake,
-                    "stop_loss": r.stop_loss,
-                    "take_profit": r.take_profit,
-                    "pnl": r.pnl,
-                    "status": r.status,
-                    "mode": r.mode,
-                    "reason": r.reason,
-                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "symbol": s.symbol,
+                    "price": s.price,
+                    "reason": s.reason,
+                    "market_condition": s.market_condition,
+                    "created_at": s.created_at.isoformat() if s.created_at else None,
                 }
-                for r in rows
-            ]
+                for s in skips[:100]
+            ],
+            "rejects": [
+                {
+                    "symbol": s.symbol,
+                    "reason": s.risk_reason or s.reason,
+                    "strategy_id": s.strategy_id,
+                    "confidence": s.confidence,
+                }
+                for s in rejects[:50]
+            ],
+        }
+
+    @staticmethod
+    def _trade_row(r: TradeJournal) -> dict:
+        breakdown = None
+        if getattr(r, "score_breakdown", None):
+            try:
+                breakdown = json.loads(r.score_breakdown)
+            except Exception:
+                breakdown = r.score_breakdown
+        return {
+            "id": r.id,
+            "symbol": r.symbol,
+            "direction": r.direction,
+            "entry_price": r.entry_price,
+            "exit_price": r.exit_price,
+            "stake": r.stake,
+            "stop_loss": r.stop_loss,
+            "take_profit": r.take_profit,
+            "pnl": r.pnl,
+            "status": r.status,
+            "mode": r.mode,
+            "reason": r.reason,
+            "signal_source": r.signal_source,
+            "confidence": getattr(r, "confidence", None),
+            "market_condition": getattr(r, "market_condition", None),
+            "score_breakdown": breakdown,
+            "sl_tp_method": getattr(r, "sl_tp_method", None),
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "closed_at": r.closed_at.isoformat() if r.closed_at else None,
+        }

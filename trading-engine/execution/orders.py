@@ -64,7 +64,7 @@ class OrderExecutor:
             duration_unit="m",
             stop_loss=sl_usd,
             take_profit=tp_usd,
-            multiplier=100,
+            multiplier=settings.DERIV_MULTIPLIER,
         )
         logger.info("Order placed %s %s contract_id=%s", signal.symbol, contract_type, result.get("contract_id"))
         return result
@@ -99,5 +99,5 @@ class OrderExecutor:
             duration_unit="m",
             stop_loss=sl_usd,
             take_profit=tp_usd,
-            multiplier=100,
+            multiplier=settings.DERIV_MULTIPLIER,
         )

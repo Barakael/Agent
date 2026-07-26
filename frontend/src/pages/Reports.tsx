@@ -4,6 +4,7 @@ import AppShell from '../components/layout/AppShell'
 import StatCard from '../components/ui/StatCard'
 import SectionCard from '../components/ui/SectionCard'
 import EmptyState from '../components/ui/EmptyState'
+import TradeCard from '../components/trading/TradeCard'
 import {
   fetchActivePlan,
   fetchEveningAiPayload,
@@ -122,7 +123,11 @@ export default function ReportsPage() {
   )
   const regimeRows = Object.entries(dayAgg?.by_regime ?? {}).sort((a, b) => b[1].trades - a[1].trades)
   const hourRows = Object.entries(dayAgg?.by_hour_utc ?? {}).sort((a, b) => a[0].localeCompare(b[0]))
+  const busiestHours = [...Object.entries(dayAgg?.by_hour_utc ?? {})].sort(
+    (a, b) => b[1].trades - a[1].trades,
+  )
   const maxHourTrades = Math.max(1, ...hourRows.map(([, b]) => b.trades))
+  const phoneJournal = filteredJournal.slice(0, 12)
 
   const downloadReview = (review: TradingReview) => {
     const blob = new Blob([review.content], { type: 'text/markdown;charset=utf-8' })
@@ -188,10 +193,32 @@ export default function ReportsPage() {
 
       <SectionCard title="Today’s session analysis" icon={Activity} className="mb-4">
         <p className="mb-3 text-xs text-[color:var(--wayda-muted)]">
-          Privacy-safe aggregates for {dayAgg?.date ?? utcToday()} (no prices or account details). Top strategy:{' '}
+          Privacy-safe aggregates for {dayAgg?.date ?? utcToday()}. Top strategy:{' '}
           <span className="font-medium text-[color:var(--wayda-ink)] dark:text-slate-100">{topStrategy(dayAgg)}</span>
         </p>
-        <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+
+        {/* Phone: 4 priority stats */}
+        <div className="mb-3 grid grid-cols-2 gap-3 md:hidden">
+          <StatCard label="Closed today" value={summary?.trades_closed ?? (loading ? '…' : 0)} />
+          <StatCard
+            label="Win rate"
+            value={summary != null ? `${summary.win_rate_pct}%` : loading ? '…' : '—'}
+            tone="accent"
+          />
+          <StatCard
+            label="Avg PnL / trade"
+            value={summary != null ? `$${summary.avg_pnl_per_trade}` : loading ? '…' : '—'}
+            tone={summary && summary.avg_pnl_per_trade < 0 ? 'danger' : summary && summary.avg_pnl_per_trade > 0 ? 'success' : 'default'}
+          />
+          <StatCard label="Skips" value={summary?.skips ?? (loading ? '…' : 0)} helper={`${summary?.risk_rejects ?? 0} rejects`} />
+        </div>
+        <p className="mb-4 text-xs text-[color:var(--wayda-muted)] md:hidden">
+          Conf {summary?.avg_confidence ?? '—'} · SL/TP pips{' '}
+          {summary?.avg_sl_distance_pips ?? '—'} / {summary?.avg_tp_distance_pips ?? '—'}
+        </p>
+
+        {/* Desktop: full 6-up */}
+        <div className="mb-4 hidden gap-3 md:grid md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
           <StatCard label="Closed today" value={summary?.trades_closed ?? (loading ? '…' : 0)} />
           <StatCard
             label="Win rate"
@@ -220,7 +247,80 @@ export default function ReportsPage() {
           />
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-3">
+        {/* Phone ranked lists */}
+        <div className="mb-4 space-y-3 md:hidden">
+          <div>
+            <p className="mb-1 text-xs font-medium text-[color:var(--wayda-muted)]">Top strategies</p>
+            {strategyRows.length === 0 ? (
+              <p className="text-xs text-[color:var(--wayda-muted)]">No closed trades today.</p>
+            ) : (
+              <ul className="space-y-1 text-xs">
+                {strategyRows.slice(0, 3).map(([sid, row], i) => (
+                  <li key={sid} className="flex justify-between gap-2 rounded-md border border-[color:var(--wayda-border)] px-2 py-1.5 dark:border-slate-700">
+                    <span>
+                      {i + 1}. {sid}
+                    </span>
+                    <span className="font-mono-metric text-[color:var(--wayda-muted)]">
+                      {row.trades} · {row.win_rate_pct}% · ${row.avg_pnl}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div>
+            <p className="mb-1 text-xs font-medium text-[color:var(--wayda-muted)]">Top regimes</p>
+            {regimeRows.length === 0 ? (
+              <p className="text-xs text-[color:var(--wayda-muted)]">No regime data yet.</p>
+            ) : (
+              <ul className="space-y-1 text-xs">
+                {regimeRows.slice(0, 3).map(([regime, row], i) => (
+                  <li key={regime} className="flex justify-between gap-2 rounded-md border border-[color:var(--wayda-border)] px-2 py-1.5 dark:border-slate-700">
+                    <span>
+                      {i + 1}. {regime}
+                    </span>
+                    <span className="font-mono-metric text-[color:var(--wayda-muted)]">
+                      {row.trades} · {row.win_rate_pct}%
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div>
+            <p className="mb-1 text-xs font-medium text-[color:var(--wayda-muted)]">Busiest hours (UTC)</p>
+            {busiestHours.length === 0 ? (
+              <p className="text-xs text-[color:var(--wayda-muted)]">No hourly activity yet.</p>
+            ) : (
+              <>
+                <ul className="space-y-2">
+                  {busiestHours.slice(0, 4).map(([hour, row]) => (
+                    <li key={hour} className="text-xs">
+                      <div className="mb-0.5 flex justify-between gap-2">
+                        <span className="font-mono-metric">{hour}:00</span>
+                        <span className="text-[color:var(--wayda-muted)]">
+                          {row.trades} · {row.win_rate_pct}%
+                        </span>
+                      </div>
+                      <div className="h-1.5 overflow-hidden rounded-full bg-[color:var(--wayda-border)] dark:bg-slate-700">
+                        <div
+                          className="h-full rounded-full bg-[color:var(--wayda-copper)]"
+                          style={{ width: `${Math.max(8, (row.trades / maxHourTrades) * 100)}%` }}
+                        />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                {busiestHours.length > 4 ? (
+                  <p className="mt-1 text-xs text-[color:var(--wayda-muted)]">+{busiestHours.length - 4} more hours</p>
+                ) : null}
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Desktop tables */}
+        <div className="hidden gap-4 md:grid lg:grid-cols-3">
           <div className="overflow-x-auto lg:col-span-1">
             <p className="mb-1 text-xs font-medium text-[color:var(--wayda-muted)]">By strategy</p>
             {strategyRows.length === 0 ? (
@@ -379,42 +479,54 @@ export default function ReportsPage() {
         {filteredJournal.length === 0 ? (
           <EmptyState title="No journal entries" description="Trades in this period will appear here." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="report-table">
-              <thead>
-                <tr>
-                  <th>When</th>
-                  <th>Symbol</th>
-                  <th>Dir</th>
-                  <th>Strategy</th>
-                  <th>Conf</th>
-                  <th>Regime</th>
-                  <th>Stake</th>
-                  <th>P&L</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredJournal.map((t) => (
-                  <tr key={t.id}>
-                    <td className="font-mono-metric text-xs">
-                      {t.created_at ? new Date(t.created_at).toLocaleString() : '—'}
-                    </td>
-                    <td>{t.symbol}</td>
-                    <td className="uppercase">{t.direction}</td>
-                    <td className="text-xs">{t.signal_source ?? '—'}</td>
-                    <td className="font-mono-metric">{t.confidence != null ? t.confidence : '—'}</td>
-                    <td className="text-xs">{t.market_condition ?? '—'}</td>
-                    <td className="font-mono-metric">${t.stake}</td>
-                    <td className="font-mono-metric">{t.pnl != null ? `$${t.pnl}` : '—'}</td>
-                    <td>
-                      <span className={statusPillClass(t.status)}>{t.status}</span>
-                    </td>
+          <>
+            <div className="space-y-2 md:hidden">
+              {phoneJournal.map((t) => (
+                <TradeCard key={t.id} trade={t} />
+              ))}
+              {filteredJournal.length > 12 ? (
+                <p className="text-xs text-[color:var(--wayda-muted)]">
+                  Showing 12 of {filteredJournal.length} — switch period or use desktop for full table
+                </p>
+              ) : null}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
+              <table className="report-table">
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Symbol</th>
+                    <th>Dir</th>
+                    <th>Strategy</th>
+                    <th>Conf</th>
+                    <th>Regime</th>
+                    <th>Stake</th>
+                    <th>P&L</th>
+                    <th>Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {filteredJournal.map((t) => (
+                    <tr key={t.id}>
+                      <td className="font-mono-metric text-xs">
+                        {t.created_at ? new Date(t.created_at).toLocaleString() : '—'}
+                      </td>
+                      <td>{t.symbol}</td>
+                      <td className="uppercase">{t.direction}</td>
+                      <td className="text-xs">{t.signal_source ?? '—'}</td>
+                      <td className="font-mono-metric">{t.confidence != null ? t.confidence : '—'}</td>
+                      <td className="text-xs">{t.market_condition ?? '—'}</td>
+                      <td className="font-mono-metric">${t.stake}</td>
+                      <td className="font-mono-metric">{t.pnl != null ? `$${t.pnl}` : '—'}</td>
+                      <td>
+                        <span className={statusPillClass(t.status)}>{t.status}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </SectionCard>
 

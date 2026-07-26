@@ -127,6 +127,14 @@ async def analysis_sources(auth: bool = Depends(validate_api_key)):
     return {"data": bot.analysis.source_status()}
 
 
+@app.get("/analysis/snapshots")
+async def analysis_snapshots(auth: bool = Depends(validate_api_key)):
+    """Live Number Engine snapshots per pair — prove Deriv feed + analysis without waiting for fills."""
+    if bot is None:
+        return {"data": []}
+    return {"data": bot.get_analysis_snapshots()}
+
+
 @app.get("/analysis/market-brief")
 async def market_brief(auth: bool = Depends(validate_api_key)):
     """Live multi-source brief for Cursor Automations (prices, calendar, headlines, fitness)."""

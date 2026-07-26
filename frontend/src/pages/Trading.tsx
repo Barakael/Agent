@@ -4,6 +4,7 @@ import AppShell from '../components/layout/AppShell'
 import EmptyState from '../components/ui/EmptyState'
 import SectionCard from '../components/ui/SectionCard'
 import StatCard from '../components/ui/StatCard'
+import TradeCard from '../components/trading/TradeCard'
 import {
   closeAllPositions,
   closePosition,
@@ -213,29 +214,58 @@ export default function TradingPage() {
         ) : null}
 
         {preflight?.sources?.backtest ? (
-          <div className="mt-3 overflow-x-auto">
-            <p className="mb-1 text-xs font-medium text-[color:var(--wayda-muted)]">Backtest</p>
-            <table className="report-table text-xs">
-              <thead>
-                <tr>
-                  <th>Pair</th>
-                  <th>Pass</th>
-                  <th>Win rate</th>
-                  <th>P&L</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Object.entries(preflight.sources.backtest).map(([pair, bt]) => (
-                  <tr key={pair}>
-                    <td>{pair}</td>
-                    <td>{bt.passed ? '✓' : '✗'}</td>
-                    <td className="font-mono-metric">{bt.win_rate != null ? `${bt.win_rate}%` : '—'}</td>
-                    <td className="font-mono-metric">{bt.total_pnl ?? '—'}</td>
+          <>
+            <details className="mt-3 md:hidden">
+              <summary className="cursor-pointer text-xs font-medium text-[color:var(--wayda-muted)]">
+                Backtest results ({Object.keys(preflight.sources.backtest).length} pairs)
+              </summary>
+              <div className="mt-2 overflow-x-auto">
+                <table className="report-table text-xs">
+                  <thead>
+                    <tr>
+                      <th>Pair</th>
+                      <th>Pass</th>
+                      <th>Win rate</th>
+                      <th>P&L</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(preflight.sources.backtest).map(([pair, bt]) => (
+                      <tr key={pair}>
+                        <td>{pair}</td>
+                        <td>{bt.passed ? '✓' : '✗'}</td>
+                        <td className="font-mono-metric">{bt.win_rate != null ? `${bt.win_rate}%` : '—'}</td>
+                        <td className="font-mono-metric">{bt.total_pnl ?? '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+            <div className="mt-3 hidden overflow-x-auto md:block">
+              <p className="mb-1 text-xs font-medium text-[color:var(--wayda-muted)]">Backtest</p>
+              <table className="report-table text-xs">
+                <thead>
+                  <tr>
+                    <th>Pair</th>
+                    <th>Pass</th>
+                    <th>Win rate</th>
+                    <th>P&L</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {Object.entries(preflight.sources.backtest).map(([pair, bt]) => (
+                    <tr key={pair}>
+                      <td>{pair}</td>
+                      <td>{bt.passed ? '✓' : '✗'}</td>
+                      <td className="font-mono-metric">{bt.win_rate != null ? `${bt.win_rate}%` : '—'}</td>
+                      <td className="font-mono-metric">{bt.total_pnl ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         ) : null}
 
         {aiDecision?.summary ? (
@@ -245,9 +275,10 @@ export default function TradingPage() {
 
       <SectionCard title="Session analysis" icon={Activity} className="mb-4">
         <p className="mb-3 text-xs text-[color:var(--wayda-muted)]">
-          Privacy-safe day aggregates from the journal (no OpenAI required).
+          Privacy-safe day aggregates
+          {dayAgg != null ? ` · ${dayAgg.summary.trades_closed} closed today` : ''}.
         </p>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <StatCard label="Armed" value={analysisArmed ? 'Yes' : 'No'} tone={analysisArmed ? 'success' : 'danger'} />
           <StatCard
             label="Win rate today"
@@ -255,7 +286,6 @@ export default function TradingPage() {
             tone="accent"
           />
           <StatCard label="Skips" value={dayAgg?.summary.skips ?? '—'} helper={`${dayAgg?.summary.risk_rejects ?? 0} rejects`} />
-          <StatCard label="Closed today" value={dayAgg?.summary.trades_closed ?? '—'} />
           <StatCard label="Top strategy" value={topStrategyFromAgg(dayAgg)} />
         </div>
       </SectionCard>
@@ -474,38 +504,48 @@ export default function TradingPage() {
         {journal.length === 0 ? (
           <EmptyState title="No trades logged" description="Signals and trades are recorded in log_only mode." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="report-table">
-              <thead>
-                <tr>
-                  <th>Symbol</th>
-                  <th>Dir</th>
-                  <th>Strategy</th>
-                  <th>Conf</th>
-                  <th>Regime</th>
-                  <th>Entry</th>
-                  <th>P&L</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {journal.map((t) => (
-                  <tr key={t.id}>
-                    <td>{t.symbol}</td>
-                    <td className="uppercase">{t.direction}</td>
-                    <td className="text-xs">{t.signal_source ?? '—'}</td>
-                    <td className="font-mono-metric">{t.confidence != null ? t.confidence : '—'}</td>
-                    <td className="text-xs">{t.market_condition ?? '—'}</td>
-                    <td className="font-mono-metric">{t.entry_price}</td>
-                    <td className="font-mono-metric">{t.pnl ?? '—'}</td>
-                    <td>
-                      <span className="status-pill">{t.status}</span>
-                    </td>
+          <>
+            <div className="space-y-2 md:hidden">
+              {journal.slice(0, 8).map((t) => (
+                <TradeCard key={t.id} trade={t} />
+              ))}
+              {journal.length > 8 ? (
+                <p className="text-xs text-[color:var(--wayda-muted)]">Showing latest 8 of {journal.length}</p>
+              ) : null}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
+              <table className="report-table">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Dir</th>
+                    <th>Strategy</th>
+                    <th>Conf</th>
+                    <th>Regime</th>
+                    <th>Entry</th>
+                    <th>P&L</th>
+                    <th>Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {journal.map((t) => (
+                    <tr key={t.id}>
+                      <td>{t.symbol}</td>
+                      <td className="uppercase">{t.direction}</td>
+                      <td className="text-xs">{t.signal_source ?? '—'}</td>
+                      <td className="font-mono-metric">{t.confidence != null ? t.confidence : '—'}</td>
+                      <td className="text-xs">{t.market_condition ?? '—'}</td>
+                      <td className="font-mono-metric">{t.entry_price}</td>
+                      <td className="font-mono-metric">{t.pnl ?? '—'}</td>
+                      <td>
+                        <span className="status-pill">{t.status}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </SectionCard>
     </AppShell>

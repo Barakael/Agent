@@ -187,6 +187,15 @@ class TradingController extends Controller
         }
     }
 
+    public function analysisSnapshots(Request $request)
+    {
+        try {
+            return response()->json($this->trading->getAnalysisSnapshots());
+        } catch (\Exception $e) {
+            return response()->json(['data' => []]);
+        }
+    }
+
     public function stop(Request $request)
     {
         $result = $this->trading->stop();

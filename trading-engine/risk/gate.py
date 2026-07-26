@@ -36,6 +36,7 @@ class RiskCheckResult:
     take_profit_price: float = 0.0
     stop_loss_pips: int = 0
     take_profit_pips: int = 0
+    sl_tp_method: str = "fixed_pips"
 
     def to_dict(self) -> dict:
         return {
@@ -46,28 +47,48 @@ class RiskCheckResult:
             "take_profit_price": self.take_profit_price,
             "stop_loss_pips": self.stop_loss_pips,
             "take_profit_pips": self.take_profit_pips,
+            "sl_tp_method": self.sl_tp_method,
         }
 
 
 class RiskGate:
-    """Non-negotiable risk controls before any order."""
+    """Non-negotiable risk controls before any order. Strategies never set stake."""
 
     def __init__(self) -> None:
         self.risk_percent = settings.RISK_PERCENT_PER_TRADE
         self.daily_limit_percent = settings.DAILY_DRAWDOWN_LIMIT_PERCENT
+        self.max_daily_profit_percent = settings.MAX_DAILY_PROFIT_PERCENT
+        self.max_trades_per_day = settings.MAX_TRADES_PER_DAY
         self.default_sl_pips = settings.DEFAULT_SL_PIPS
         self.default_tp_pips = settings.DEFAULT_TP_PIPS
         self._daily_pnl: float = 0.0
         self._session_start_balance: float = 0.0
         self._kill_switch_active: bool = False
+        self._trades_today: int = 0
+        self._session_date: str = ""
 
     def reset_session(self, balance: float) -> None:
         self._daily_pnl = 0.0
         self._session_start_balance = balance
         self._kill_switch_active = False
+        self._trades_today = 0
+        self._session_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         logger.info("Risk session reset balance=%.2f", balance)
 
+    def _roll_day_if_needed(self) -> None:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if self._session_date and self._session_date != today:
+            self._trades_today = 0
+            self._daily_pnl = 0.0
+            self._kill_switch_active = False
+            self._session_date = today
+
+    def record_trade_opened(self) -> None:
+        self._roll_day_if_needed()
+        self._trades_today += 1
+
     def record_pnl(self, pnl: float) -> None:
+        self._roll_day_if_needed()
         self._daily_pnl += pnl
         if self._session_start_balance > 0:
             drawdown_pct = abs(min(0, self._daily_pnl)) / self._session_start_balance * 100
@@ -77,6 +98,14 @@ class RiskGate:
                     "Daily kill switch triggered: drawdown %.2f%% >= %.2f%%",
                     drawdown_pct,
                     self.daily_limit_percent,
+                )
+            profit_pct = max(0, self._daily_pnl) / self._session_start_balance * 100
+            if profit_pct >= self.max_daily_profit_percent:
+                self._kill_switch_active = True
+                logger.warning(
+                    "Daily profit cap reached: %.2f%% >= %.2f%% — stopping new trades",
+                    profit_pct,
+                    self.max_daily_profit_percent,
                 )
 
     def trigger_kill_switch(self, reason: str = "manual") -> None:
@@ -91,6 +120,10 @@ class RiskGate:
     def daily_pnl(self) -> float:
         return self._daily_pnl
 
+    @property
+    def trades_today(self) -> int:
+        return self._trades_today
+
     def _pip_size(self, symbol: str) -> float:
         return PIP_SIZE.get(symbol, 0.0001)
 
@@ -98,7 +131,6 @@ class RiskGate:
         """USD stake for multipliers = % of balance risked (not FX lot sizing)."""
         if sl_pips <= 0 or balance <= 0:
             return 0.0
-        # For Deriv multipliers, `amount` is the USD stake. Risk % maps directly to stake.
         stake = balance * (self.risk_percent / 100.0)
         return max(1.0, round(stake, 2))
 
@@ -107,19 +139,36 @@ class RiskGate:
         signal: TradeSignal,
         sl_pips: Optional[int] = None,
         tp_pips: Optional[int] = None,
-    ) -> tuple[float, float, int, int]:
-        sl_pips = sl_pips or self.default_sl_pips
-        tp_pips = tp_pips or self.default_tp_pips
+    ) -> tuple[float, float, int, int, str]:
+        """Prefer strategy-suggested ATR/structure levels; fall back to fixed pips."""
         pip = self._pip_size(signal.symbol)
         price = signal.price
+        suggested_sl = getattr(signal, "suggested_sl", None)
+        suggested_tp = getattr(signal, "suggested_tp", None)
+        method = getattr(signal, "sl_tp_method", None) or "fixed_pips"
 
+        if suggested_sl and suggested_tp and suggested_sl > 0 and suggested_tp > 0:
+            sl = float(suggested_sl)
+            tp = float(suggested_tp)
+            if signal.direction == SignalDirection.BUY:
+                sl_dist = max(price - sl, pip)
+                tp_dist = max(tp - price, pip)
+            else:
+                sl_dist = max(sl - price, pip)
+                tp_dist = max(price - tp, pip)
+            sl_pips_used = max(1, int(round(sl_dist / pip)))
+            tp_pips_used = max(1, int(round(tp_dist / pip)))
+            return sl, tp, sl_pips_used, tp_pips_used, method or "atr"
+
+        sl_pips = sl_pips or self.default_sl_pips
+        tp_pips = tp_pips or self.default_tp_pips
         if signal.direction == SignalDirection.BUY:
             sl = price - sl_pips * pip
             tp = price + tp_pips * pip
         else:
             sl = price + sl_pips * pip
             tp = price - tp_pips * pip
-        return sl, tp, sl_pips, tp_pips
+        return sl, tp, sl_pips, tp_pips, "fixed_pips"
 
     def evaluate(
         self,
@@ -131,6 +180,8 @@ class RiskGate:
         tp_pips: Optional[int] = None,
         max_stake_usd: Optional[float] = None,
     ) -> RiskCheckResult:
+        self._roll_day_if_needed()
+
         if self._kill_switch_active:
             return RiskCheckResult(
                 decision=RiskDecision.REJECTED,
@@ -151,8 +202,20 @@ class RiskGate:
                 decision=RiskDecision.REJECTED,
                 reason="Insufficient balance",
             )
+        if self._trades_today >= self.max_trades_per_day:
+            return RiskCheckResult(
+                decision=RiskDecision.REJECTED,
+                reason=f"Max trades today ({self.max_trades_per_day}) reached",
+            )
+        if self._session_start_balance > 0:
+            profit_pct = max(0, self._daily_pnl) / self._session_start_balance * 100
+            if profit_pct >= self.max_daily_profit_percent:
+                return RiskCheckResult(
+                    decision=RiskDecision.REJECTED,
+                    reason="Max daily profit reached",
+                )
 
-        sl, tp, sl_pips_used, tp_pips_used = self.calculate_sl_tp_prices(
+        sl, tp, sl_pips_used, tp_pips_used, method = self.calculate_sl_tp_prices(
             signal, sl_pips, tp_pips
         )
         if sl <= 0 or tp <= 0:
@@ -167,7 +230,6 @@ class RiskGate:
                 decision=RiskDecision.REJECTED,
                 reason="Stake calculation failed",
             )
-        # Always enforce hard ceiling even if plan omitted max_stake
         hard_ceiling = float(getattr(settings, "PLAN_MAX_STAKE_USD_CEILING", 50.0))
         stake = min(stake, hard_ceiling)
         if max_stake_usd is not None and max_stake_usd > 0:
@@ -181,6 +243,7 @@ class RiskGate:
             take_profit_price=tp,
             stop_loss_pips=sl_pips_used,
             take_profit_pips=tp_pips_used,
+            sl_tp_method=method,
         )
 
     def validate_manual_order(
@@ -211,4 +274,5 @@ class RiskGate:
             stake=stake,
             stop_loss_price=stop_loss,
             take_profit_price=take_profit,
+            sl_tp_method="manual",
         )

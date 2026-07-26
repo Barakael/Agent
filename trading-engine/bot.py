@@ -16,12 +16,13 @@ from data.deriv_ws import DerivWebSocketClient
 from execution.orders import OrderExecutor
 from execution.positions import PositionManager
 from journal.writer import JournalWriter
+from number_engine import NumberEngine
 from plan.store import plan_store
 from plan.schema import DailyPlan
 from risk.gate import RiskDecision, RiskGate
 from risk.session import SessionManager
 from signals.engine import SignalEngine
-from strategies import evaluate_strategies
+from strategies import PATTERN_STRATEGY_IDS, evaluate_strategies_detailed
 from strategies.base import StrategyContext
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ class TradingBot:
             buffer_size=settings.CANDLE_BUFFER_SIZE,
         )
         self.signals = SignalEngine()
+        self.number_engine = NumberEngine()
         self.risk = RiskGate()
         self.session = SessionManager()
         self.journal = JournalWriter()
@@ -130,6 +132,10 @@ class TradingBot:
             return
 
         df = self.aggregator.get_dataframe(symbol)
+        snapshot = self.number_engine.compute(symbol, df)
+        if snapshot is None:
+            return
+
         ctx = StrategyContext(
             trade_mode=plan.trade_mode if plan else "pattern",
             directional_bias=plan.directional_bias if plan else "neutral",
@@ -138,7 +144,7 @@ class TradingBot:
         strategy_ids = (
             list(plan.enabled_strategies)
             if plan
-            else ["macd_rsi"]
+            else list(PATTERN_STRATEGY_IDS)
         )
         armed = self.analysis.armed_strategy_ids
         if plan and plan.trade_mode == "pattern":
@@ -147,14 +153,41 @@ class TradingBot:
             armed_filter = pattern_armed if pattern_armed else None
         else:
             armed_filter = None
-        signal = evaluate_strategies(
+
+        manager_result = evaluate_strategies_detailed(
             symbol,
             df,
             strategy_ids,
             ctx,
             armed_ids=armed_filter,
+            snapshot=snapshot,
         )
+        signal = manager_result.signal
         if signal is None:
+            # Log meaningful skips only (near-misses / low-confidence rejects) — not every quiet bar
+            evals = manager_result.evaluations or []
+            best_conf = max((e.confidence for e in evals), default=0.0)
+            should_log_skip = best_conf >= 40.0 or (
+                manager_result.skip_reason
+                and "confidence" in (manager_result.skip_reason or "").lower()
+            )
+            if should_log_skip:
+                self.journal.log_no_trade(
+                    symbol=symbol,
+                    price=snapshot.close,
+                    epoch=snapshot.epoch,
+                    regime=manager_result.regime,
+                    reason=manager_result.skip_reason or "No trade",
+                    evaluations=manager_result.evaluations,
+                    rsi=snapshot.rsi,
+                    macd=snapshot.macd,
+                )
+            logger.debug(
+                "No trade %s regime=%s: %s",
+                symbol,
+                manager_result.regime,
+                manager_result.skip_reason,
+            )
             return
 
         # Bias: one open bias position per pair
@@ -198,14 +231,16 @@ class TradingBot:
 
         if settings.TRADING_MODE == "log_only":
             logger.info(
-                "SIGNAL %s %s @ %.5f RSI=%.1f — %s [analysis GO]",
+                "SIGNAL %s %s @ %.5f conf=%.0f RSI=%.1f — %s [analysis GO]",
                 signal.direction.value,
                 symbol,
                 signal.price,
+                getattr(signal, "confidence", 0),
                 signal.rsi,
                 signal.reason,
             )
             self.journal.log_trade_open(signal, risk_result, mode="log_only")
+            self.risk.record_trade_opened()
             await self.telegram.trade_opened(
                 symbol, signal.direction.value, risk_result.stake, "log_only"
             )
@@ -222,6 +257,7 @@ class TradingBot:
         order = await self.executor.execute_signal(signal, risk_result)
         contract_id = str(order.get("contract_id", "")) if order else None
         self.journal.log_trade_open(signal, risk_result, contract_id, settings.TRADING_MODE)
+        self.risk.record_trade_opened()
         if contract_id and hold == "swing":
             self.positions.mark_swing(int(order["contract_id"]) if order and order.get("contract_id") else 0)
         await self.telegram.trade_opened(

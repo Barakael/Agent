@@ -7,6 +7,7 @@ from typing import Optional, Protocol
 
 import pandas as pd
 
+from number_engine.snapshot import MarketSnapshot
 from signals.engine import SignalDirection, TradeSignal
 
 
@@ -20,9 +21,15 @@ class StrategyContext:
 
 @dataclass
 class StrategySignal(TradeSignal):
-    strategy_id: str = "macd_rsi"
+    strategy_id: str = "momentum"
     trade_mode: str = "pattern"
     hold_policy: str = "intraday"
+    confidence: float = 0.0
+    market_condition: str = ""
+    score_breakdown: dict = field(default_factory=dict)
+    suggested_sl: Optional[float] = None
+    suggested_tp: Optional[float] = None
+    sl_tp_method: str = "atr"
 
     def to_dict(self) -> dict:
         base = super().to_dict()
@@ -31,19 +38,86 @@ class StrategySignal(TradeSignal):
                 "strategy_id": self.strategy_id,
                 "trade_mode": self.trade_mode,
                 "hold_policy": self.hold_policy,
+                "confidence": self.confidence,
+                "market_condition": self.market_condition,
+                "score_breakdown": self.score_breakdown,
+                "suggested_sl": self.suggested_sl,
+                "suggested_tp": self.suggested_tp,
+                "sl_tp_method": self.sl_tp_method,
             }
         )
         return base
 
 
+@dataclass
+class StrategyEvaluation:
+    """Result of one strategy analysing a MarketSnapshot."""
+
+    strategy_id: str
+    direction: SignalDirection  # BUY / SELL / NONE (= no trade)
+    confidence: float
+    reasons: list[str] = field(default_factory=list)
+    score_breakdown: dict = field(default_factory=dict)
+    suggested_sl: Optional[float] = None
+    suggested_tp: Optional[float] = None
+    sl_tp_method: str = "atr"
+
+    @property
+    def is_trade(self) -> bool:
+        return self.direction in (SignalDirection.BUY, SignalDirection.SELL) and self.confidence > 0
+
+
 class Strategy(Protocol):
     strategy_id: str
     trade_mode: str
+    regimes: tuple[str, ...]
+
+    def evaluate_snapshot(
+        self, snapshot: MarketSnapshot, ctx: StrategyContext | None = None
+    ) -> StrategyEvaluation:
+        ...
 
     def evaluate(
         self, symbol: str, df: pd.DataFrame, ctx: StrategyContext | None = None
     ) -> Optional[StrategySignal]:
         ...
+
+
+def atr_sl_tp(
+    snapshot: MarketSnapshot,
+    direction: SignalDirection,
+    atr_mult: float = 1.5,
+    rr: float = 2.0,
+) -> tuple[float, float, str]:
+    """Structure-aware ATR stop and R:R take-profit."""
+    atr = max(snapshot.atr, 1e-8)
+    price = snapshot.close
+    method = "atr"
+
+    if direction == SignalDirection.BUY:
+        structure_sl = snapshot.swing_low - 0.1 * atr
+        atr_sl = price - atr_mult * atr
+        sl = min(structure_sl, atr_sl) if structure_sl < price else atr_sl
+        if structure_sl < price:
+            method = "atr_swing"
+        risk = price - sl
+        tp = price + rr * risk
+        # Prefer resistance as TP if it offers at least 1.5R
+        if snapshot.resistance > price and (snapshot.resistance - price) >= 1.5 * risk:
+            tp = snapshot.resistance
+            method = "atr_structure"
+    else:
+        structure_sl = snapshot.swing_high + 0.1 * atr
+        atr_sl = price + atr_mult * atr
+        sl = max(structure_sl, atr_sl) if structure_sl > price else atr_sl
+        if structure_sl > price:
+            method = "atr_swing"
+        risk = sl - price
+        tp = price - rr * risk
+        if snapshot.support < price and (price - snapshot.support) >= 1.5 * risk:
+            tp = snapshot.support
+            method = "atr_structure"
+    return sl, tp, method
 
 
 def make_signal(
@@ -59,6 +133,12 @@ def make_signal(
     macd_signal: float = 0.0,
     trade_mode: str = "pattern",
     hold_policy: str = "intraday",
+    confidence: float = 0.0,
+    market_condition: str = "",
+    score_breakdown: dict | None = None,
+    suggested_sl: float | None = None,
+    suggested_tp: float | None = None,
+    sl_tp_method: str = "atr",
 ) -> StrategySignal:
     return StrategySignal(
         symbol=symbol,
@@ -72,4 +152,48 @@ def make_signal(
         strategy_id=strategy_id,
         trade_mode=trade_mode,
         hold_policy=hold_policy,
+        confidence=confidence,
+        market_condition=market_condition,
+        score_breakdown=score_breakdown or {},
+        suggested_sl=suggested_sl,
+        suggested_tp=suggested_tp,
+        sl_tp_method=sl_tp_method,
+    )
+
+
+def evaluation_to_signal(
+    ev: StrategyEvaluation,
+    snapshot: MarketSnapshot,
+    ctx: StrategyContext,
+) -> Optional[StrategySignal]:
+    if not ev.is_trade:
+        return None
+    return make_signal(
+        strategy_id=ev.strategy_id,
+        symbol=snapshot.symbol,
+        direction=ev.direction,
+        price=snapshot.close,
+        epoch=snapshot.epoch,
+        reason="; ".join(ev.reasons) if ev.reasons else ev.strategy_id,
+        rsi=snapshot.rsi,
+        macd=snapshot.macd,
+        macd_signal=snapshot.macd_signal,
+        trade_mode=ctx.trade_mode,
+        hold_policy=ctx.hold_policy,
+        confidence=ev.confidence,
+        market_condition=snapshot.regime,
+        score_breakdown=ev.score_breakdown,
+        suggested_sl=ev.suggested_sl,
+        suggested_tp=ev.suggested_tp,
+        sl_tp_method=ev.sl_tp_method,
+    )
+
+
+def no_trade(strategy_id: str, reasons: list[str], breakdown: dict | None = None) -> StrategyEvaluation:
+    return StrategyEvaluation(
+        strategy_id=strategy_id,
+        direction=SignalDirection.NONE,
+        confidence=0.0,
+        reasons=reasons,
+        score_breakdown=breakdown or {},
     )

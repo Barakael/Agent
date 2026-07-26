@@ -103,6 +103,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/status', [TradingController::class, 'status']);
         Route::get('/positions', [TradingController::class, 'positions']);
         Route::get('/journal', [TradingController::class, 'journal']);
+        Route::get('/evening-ai-payload', [TradingController::class, 'eveningAiPayload']);
         Route::get('/metrics', [TradingController::class, 'metrics']);
         Route::get('/preflight', [TradingController::class, 'preflightLatest']);
         Route::post('/preflight', [TradingController::class, 'runPreflight']);

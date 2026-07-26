@@ -67,6 +67,38 @@ class TradingController extends Controller
         }
     }
 
+    public function eveningAiPayload(Request $request)
+    {
+        $validated = $request->validate([
+            'day' => 'sometimes|date_format:Y-m-d',
+        ]);
+        try {
+            return response()->json(
+                $this->trading->getEveningAiPayload($validated['day'] ?? null)
+            );
+        } catch (\Exception $e) {
+            return response()->json([
+                'data' => [
+                    'date' => $validated['day'] ?? now('UTC')->toDateString(),
+                    'summary' => [
+                        'trades_opened' => 0,
+                        'trades_closed' => 0,
+                        'win_rate_pct' => 0,
+                        'avg_pnl_per_trade' => 0,
+                        'skips' => 0,
+                        'risk_rejects' => 0,
+                        'avg_confidence' => null,
+                        'avg_sl_distance_pips' => null,
+                        'avg_tp_distance_pips' => null,
+                    ],
+                    'by_strategy' => (object) [],
+                    'by_regime' => (object) [],
+                    'by_hour_utc' => (object) [],
+                ],
+            ]);
+        }
+    }
+
     public function metrics(Request $request)
     {
         try {

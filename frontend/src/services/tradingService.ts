@@ -46,6 +46,7 @@ export type TradingReview = {
   file: string
   date: string | null
   content: string
+  kind?: 'evening' | 'plan'
 }
 
 export type PreflightSnapshot = {

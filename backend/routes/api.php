@@ -109,6 +109,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/preflight', [TradingController::class, 'runPreflight']);
         Route::get('/analysis-decision', [TradingController::class, 'analysisDecision']);
         Route::get('/analysis/sources', [TradingController::class, 'analysisSources']);
+        Route::get('/analysis/snapshots', [TradingController::class, 'analysisSnapshots']);
         Route::post('/pause', [TradingController::class, 'pause']);
         Route::post('/resume', [TradingController::class, 'resume']);
         Route::post('/kill', [TradingController::class, 'kill'])->middleware('role:admin');

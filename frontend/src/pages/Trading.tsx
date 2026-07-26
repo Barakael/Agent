@@ -10,6 +10,7 @@ import {
   closePosition,
   fetchActivePlan,
   fetchAnalysisDecision,
+  fetchAnalysisSnapshots,
   fetchEveningAiPayload,
   fetchTradingJournal,
   fetchTradingMetrics,
@@ -23,6 +24,7 @@ import {
   runPreflight,
   startTradingBot,
   type AnalysisDecision,
+  type AnalysisSnapshot,
   type DailyPlan,
   type EveningAiPayload,
   type PreflightSnapshot,
@@ -33,7 +35,7 @@ import {
   type TradingStatus,
 } from '../services/tradingService'
 
-const PAIRS = ['frxEURUSD', 'frxGBPUSD', 'frxUSDJPY', 'frxAUDUSD']
+const FALLBACK_PAIRS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100']
 
 function topStrategyFromAgg(payload: EveningAiPayload | null): string {
   if (!payload) return '—'
@@ -55,20 +57,23 @@ export default function TradingPage() {
   const [activePlan, setActivePlan] = useState<DailyPlan | null>(null)
   const [latestReview, setLatestReview] = useState<TradingReview | null>(null)
   const [dayAgg, setDayAgg] = useState<EveningAiPayload | null>(null)
+  const [snapshots, setSnapshots] = useState<AnalysisSnapshot[]>([])
   const [preflightRunning, setPreflightRunning] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  const [symbol, setSymbol] = useState(PAIRS[0])
+  const [symbol, setSymbol] = useState(FALLBACK_PAIRS[0])
   const [direction, setDirection] = useState<'buy' | 'sell'>('buy')
   const [stake, setStake] = useState('10')
   const [stopLoss, setStopLoss] = useState('')
   const [takeProfit, setTakeProfit] = useState('')
 
+  const pairs = status?.pairs?.length ? status.pairs : FALLBACK_PAIRS
+
   const refresh = useCallback(async () => {
     try {
       setError('')
-      const [s, p, j, m, ai, planResp, reviewsResp, agg] = await Promise.all([
+      const [s, p, j, m, ai, planResp, reviewsResp, agg, snaps] = await Promise.all([
         fetchTradingStatus(),
         fetchTradingPositions(),
         fetchTradingJournal(),
@@ -77,6 +82,7 @@ export default function TradingPage() {
         fetchActivePlan().catch(() => ({ data: null })),
         fetchTradingReviews().catch(() => ({ reviews: [], latest_ai_decision: null })),
         fetchEveningAiPayload().catch(() => null),
+        fetchAnalysisSnapshots().catch(() => []),
       ])
       setStatus(s)
       setPositions(p)
@@ -89,6 +95,10 @@ export default function TradingPage() {
       setActivePlan(planResp.data ?? s.active_plan ?? null)
       setLatestReview(reviewsResp.reviews?.[0] ?? null)
       setDayAgg(agg)
+      setSnapshots(snaps)
+      setSymbol((prev) =>
+        s.pairs?.length && !s.pairs.includes(prev) ? s.pairs[0] : prev,
+      )
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load trading data')
     } finally {
@@ -98,7 +108,7 @@ export default function TradingPage() {
 
   useEffect(() => {
     void refresh()
-    const interval = setInterval(() => void refresh(), 30000)
+    const interval = setInterval(() => void refresh(), 10000)
     return () => clearInterval(interval)
   }, [refresh])
 
@@ -273,6 +283,86 @@ export default function TradingPage() {
         ) : null}
       </SectionCard>
 
+      <SectionCard title="Live analysis" icon={Activity} className="mb-4">
+        <p className="mb-3 text-xs text-[color:var(--wayda-muted)]">
+          Number Engine on each Deriv pair (updates on candle close). Empty journal does not mean idle —
+          watch price, regime, and confidence here.
+        </p>
+        {snapshots.length === 0 ? (
+          <EmptyState
+            title="Waiting for first candle"
+            description="Feeds are connected once pairs show feed_ok after the next 5m close."
+          />
+        ) : (
+          <>
+            <div className="space-y-2 md:hidden">
+              {snapshots.map((row) => (
+                <div
+                  key={row.symbol}
+                  className="rounded-lg border border-[color:var(--wayda-border)] px-3 py-2 text-xs"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium">{row.symbol}</span>
+                    <span className={row.feed_ok ? 'text-emerald-600' : 'text-amber-600'}>
+                      {row.feed_ok ? 'feed live' : 'no feed'}
+                    </span>
+                  </div>
+                  <div className="mt-1 font-mono-metric text-[color:var(--wayda-muted)]">
+                    {row.price != null ? row.price.toFixed(2) : '—'} · {row.regime ?? '—'} · RSI{' '}
+                    {row.rsi ?? '—'} · conf {row.confidence}
+                  </div>
+                  <div className="mt-1 text-[color:var(--wayda-muted)]">
+                    {row.signal
+                      ? `Signal ${row.signal} · ${row.best_strategy ?? ''}`
+                      : row.skip_reason ?? '—'}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="text-[color:var(--wayda-muted)]">
+                    <th className="py-1">Pair</th>
+                    <th>Price</th>
+                    <th>Regime</th>
+                    <th>RSI</th>
+                    <th>Strategy</th>
+                    <th>Conf</th>
+                    <th>Status</th>
+                    <th>Feed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {snapshots.map((row) => (
+                    <tr key={row.symbol} className="border-t border-[color:var(--wayda-border)]">
+                      <td className="py-1.5 font-medium">{row.symbol}</td>
+                      <td className="font-mono-metric">
+                        {row.price != null ? row.price.toFixed(2) : '—'}
+                      </td>
+                      <td>{row.regime ?? '—'}</td>
+                      <td className="font-mono-metric">{row.rsi ?? '—'}</td>
+                      <td>{row.best_strategy ?? '—'}</td>
+                      <td className="font-mono-metric">{row.confidence}</td>
+                      <td className="max-w-[14rem] truncate" title={row.skip_reason ?? row.signal ?? ''}>
+                        {row.signal ? `signal ${row.signal}` : row.skip_reason ?? '—'}
+                      </td>
+                      <td className={row.feed_ok ? 'text-emerald-600' : 'text-amber-600'}>
+                        {row.feed_ok
+                          ? row.last_tick_age_sec != null
+                            ? `${row.last_tick_age_sec}s`
+                            : 'ok'
+                          : 'down'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </SectionCard>
+
       <SectionCard title="Session analysis" icon={Activity} className="mb-4">
         <p className="mb-3 text-xs text-[color:var(--wayda-muted)]">
           Privacy-safe day aggregates
@@ -436,7 +526,7 @@ export default function TradingPage() {
           <p className="mb-3 text-xs text-[color:var(--wayda-muted)]">Stop loss and take profit are mandatory.</p>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             <select className="form-input" value={symbol} onChange={(e) => setSymbol(e.target.value)}>
-              {PAIRS.map((p) => (
+              {pairs.map((p) => (
                 <option key={p} value={p}>
                   {p}
                 </option>

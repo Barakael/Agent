@@ -90,6 +90,16 @@ class TradingService
         return $this->request('GET', '/journal/day-review', $query);
     }
 
+    public function getEveningAiPayload(?string $day = null): array
+    {
+        $query = [];
+        if ($day) {
+            $query['day'] = $day;
+        }
+
+        return $this->request('GET', '/journal/evening-ai-payload', $query);
+    }
+
     public function saveEveningReview(array $body): array
     {
         return $this->request('POST', '/journal/evening-review', $body);

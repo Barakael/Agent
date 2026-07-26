@@ -26,6 +26,7 @@ from models.schemas import (
 from services.ai_service import AIService
 from services.runner_client import RunnerClient
 from services.trading_analysis import synthesize_daily_analysis
+from services.evening_review import synthesize_evening_review
 from services.voice.stt import transcribe_audio
 from services.voice.tts import synthesize_speech
 
@@ -220,6 +221,23 @@ async def trading_daily_analysis(
     except Exception:
         logger.exception("Daily trading analysis failed")
         raise HTTPException(status_code=502, detail="Daily analysis failed")
+
+
+@app.post("/trading/evening-review")
+async def trading_evening_review(
+    payload: dict,
+    auth: bool = Depends(validate_api_key),
+):
+    """Post-session learning review from journal stats — never places orders."""
+    ai_service: AIService = getattr(app.state, "ai_service", None)
+    if ai_service is None:
+        raise HTTPException(status_code=503, detail="AI service not available")
+    try:
+        result = synthesize_evening_review(ai_service, payload)
+        return result
+    except Exception:
+        logger.exception("Evening trading review failed")
+        raise HTTPException(status_code=502, detail="Evening review failed")
 
 
 @app.get("/traces/{trace_id}", response_class=JSONResponse)

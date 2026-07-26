@@ -210,14 +210,22 @@ class TradingController extends Controller
         $items = [];
         if (is_dir($dir)) {
             $files = collect(scandir($dir) ?: [])
-                ->filter(fn ($f) => str_starts_with($f, 'review_') && str_ends_with($f, '.md'))
+                ->filter(fn ($f) => (
+                    (str_starts_with($f, 'review_') || str_starts_with($f, 'evening_review_'))
+                    && str_ends_with($f, '.md')
+                ))
                 ->sortDesc()
-                ->take(14);
+                ->take(28);
             foreach ($files as $file) {
                 $path = $dir.'/'.$file;
+                $date = null;
+                if (preg_match('/(?:evening_)?review_(\d{4}-\d{2}-\d{2})\.md/', $file, $m)) {
+                    $date = $m[1];
+                }
                 $items[] = [
                     'file' => $file,
-                    'date' => preg_match('/review_(\d{4}-\d{2}-\d{2})\.md/', $file, $m) ? $m[1] : null,
+                    'date' => $date,
+                    'kind' => str_starts_with($file, 'evening_review_') ? 'evening' : 'plan',
                     'content' => file_get_contents($path) ?: '',
                 ];
             }

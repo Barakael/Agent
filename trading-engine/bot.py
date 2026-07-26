@@ -55,6 +55,8 @@ class TradingBot:
         self._task: Optional[asyncio.Task] = None
         self._feed_task: Optional[asyncio.Task] = None
         self._subscribed_symbols: set[str] = set()
+        self._last_analysis: dict[str, dict] = {}
+        self._last_tick_epoch: dict[str, int] = {}
         self._account_probed = False
         self._account_probe_error: Optional[str] = None
         self.plan_store = plan_store
@@ -117,9 +119,79 @@ class TradingBot:
         self.journal.update_bot_state("killed", settings.TRADING_MODE, self.risk.daily_pnl)
 
     def _on_tick(self, symbol: str, price: float, epoch: int) -> None:
+        self._last_tick_epoch[symbol] = epoch
         closed = self.aggregator.on_tick(symbol, price, epoch)
         if closed is not None:
             asyncio.create_task(self._on_candle_close(symbol))
+
+    def _record_analysis(
+        self,
+        symbol: str,
+        *,
+        price: float,
+        regime: str,
+        rsi: float,
+        atr: float,
+        epoch: int,
+        bars: int,
+        best_strategy: str | None,
+        confidence: float,
+        skip_reason: str | None,
+        signal_direction: str | None,
+    ) -> None:
+        import time as _time
+
+        now = int(_time.time())
+        last_tick = self._last_tick_epoch.get(symbol, 0)
+        self._last_analysis[symbol] = {
+            "symbol": symbol,
+            "price": price,
+            "regime": regime,
+            "rsi": round(rsi, 2) if rsi is not None else None,
+            "atr": round(atr, 5) if atr is not None else None,
+            "epoch": epoch,
+            "bars": bars,
+            "best_strategy": best_strategy,
+            "confidence": round(confidence, 1),
+            "skip_reason": skip_reason,
+            "signal": signal_direction,
+            "feed_ok": symbol in self._subscribed_symbols,
+            "last_tick_age_sec": (now - last_tick) if last_tick else None,
+            "updated_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        }
+
+    def get_analysis_snapshots(self) -> list[dict]:
+        """Last Number Engine evaluation per active pair (for live UI)."""
+        out: list[dict] = []
+        for symbol in self.active_pairs:
+            if symbol in self._last_analysis:
+                out.append(self._last_analysis[symbol])
+            else:
+                df = self.aggregator.get_dataframe(symbol)
+                bars = len(df)
+                last_tick = self._last_tick_epoch.get(symbol, 0)
+                import time as _time
+
+                now = int(_time.time())
+                out.append(
+                    {
+                        "symbol": symbol,
+                        "price": float(df["close"].iloc[-1]) if bars else None,
+                        "regime": None,
+                        "rsi": None,
+                        "atr": None,
+                        "epoch": int(df["epoch"].iloc[-1]) if bars and "epoch" in df.columns else None,
+                        "bars": bars,
+                        "best_strategy": None,
+                        "confidence": 0.0,
+                        "skip_reason": "waiting_for_candle_close" if bars else "warming_up",
+                        "signal": None,
+                        "feed_ok": symbol in self._subscribed_symbols,
+                        "last_tick_age_sec": (now - last_tick) if last_tick else None,
+                        "updated_at": None,
+                    }
+                )
+        return out
 
     async def _on_candle_close(self, symbol: str) -> None:
         if self._paused or not self._running:
@@ -136,6 +208,19 @@ class TradingBot:
         df = self.aggregator.get_dataframe(symbol)
         snapshot = self.number_engine.compute(symbol, df)
         if snapshot is None:
+            self._record_analysis(
+                symbol,
+                price=float(df["close"].iloc[-1]) if len(df) else 0.0,
+                regime="unknown",
+                rsi=0.0,
+                atr=0.0,
+                epoch=int(df["epoch"].iloc[-1]) if len(df) and "epoch" in df.columns else 0,
+                bars=len(df),
+                best_strategy=None,
+                confidence=0.0,
+                skip_reason="insufficient_bars",
+                signal_direction=None,
+            )
             return
 
         ctx = StrategyContext(
@@ -155,7 +240,6 @@ class TradingBot:
             armed = self.analysis.armed_strategy_ids
             if plan and plan.trade_mode == "pattern":
                 pattern_armed = {s for s in armed if s != "bias_swing"}
-                # If gate has not armed any patterns yet, allow planned strategies (demo / cold start)
                 armed_filter = pattern_armed if pattern_armed else None
             else:
                 armed_filter = None
@@ -169,10 +253,25 @@ class TradingBot:
             snapshot=snapshot,
         )
         signal = manager_result.signal
+        evals = manager_result.evaluations or []
+        best_eval = max(evals, key=lambda e: e.confidence, default=None) if evals else None
+        best_conf = best_eval.confidence if best_eval else 0.0
+        best_id = best_eval.strategy_id if best_eval else None
+
         if signal is None:
-            # Log meaningful skips only (near-misses / low-confidence rejects) — not every quiet bar
-            evals = manager_result.evaluations or []
-            best_conf = max((e.confidence for e in evals), default=0.0)
+            self._record_analysis(
+                symbol,
+                price=snapshot.close,
+                regime=manager_result.regime,
+                rsi=snapshot.rsi,
+                atr=snapshot.atr,
+                epoch=snapshot.epoch,
+                bars=len(df),
+                best_strategy=best_id,
+                confidence=best_conf,
+                skip_reason=manager_result.skip_reason or "No trade",
+                signal_direction=None,
+            )
             should_log_skip = best_conf >= 40.0 or (
                 manager_result.skip_reason
                 and "confidence" in (manager_result.skip_reason or "").lower()
@@ -195,6 +294,20 @@ class TradingBot:
                 manager_result.skip_reason,
             )
             return
+
+        self._record_analysis(
+            symbol,
+            price=snapshot.close,
+            regime=manager_result.regime,
+            rsi=snapshot.rsi,
+            atr=snapshot.atr,
+            epoch=snapshot.epoch,
+            bars=len(df),
+            best_strategy=getattr(signal, "strategy_id", best_id),
+            confidence=getattr(signal, "confidence", best_conf),
+            skip_reason=None,
+            signal_direction=signal.direction.value,
+        )
 
         # Bias: one open bias position per pair
         if getattr(signal, "trade_mode", "pattern") == "bias":
@@ -267,7 +380,18 @@ class TradingBot:
             self.journal.log_signal_rejected(signal, "preflight_not_armed")
             return
 
-        order = await self.executor.execute_signal(signal, risk_result)
+        try:
+            order = await self.executor.execute_signal(signal, risk_result)
+        except Exception as exc:
+            msg = f"execution_failed: {exc}"
+            logger.exception("Order execution failed %s", symbol)
+            self.journal.log_signal_rejected(signal, msg[:500])
+            cached = self._last_analysis.get(symbol)
+            if cached:
+                cached["skip_reason"] = msg[:200]
+                cached["signal"] = signal.direction.value
+            return
+
         contract_id = str(order.get("contract_id", "")) if order else None
         self.journal.log_trade_open(signal, risk_result, contract_id, settings.TRADING_MODE)
         self.risk.record_trade_opened()

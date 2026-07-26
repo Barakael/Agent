@@ -12,12 +12,18 @@ use Illuminate\Support\Facades\Validator;
 class TradingWebhookController extends Controller
 {
     private const STRATEGY_IDS = [
+        'trend_following',
+        'breakout',
+        'range_trading',
+        'momentum',
+        'price_action',
+        'bias_swing',
+        // Legacy aliases still accepted by engine
         'macd_rsi',
         'ema_pullback',
         'rsi_divergence',
         'bollinger_mean_reversion',
         'engulfing_htf',
-        'bias_swing',
     ];
 
     public function __construct(protected TradingService $trading)
@@ -133,7 +139,7 @@ class TradingWebhookController extends Controller
         $data['directional_bias'] = $data['directional_bias'] ?? 'neutral';
         $data['hold_policy'] = $data['hold_policy'] ?? ($data['trade_mode'] === 'bias' ? 'swing' : 'intraday');
         $data['max_hold_days'] = $data['max_hold_days'] ?? ($data['trade_mode'] === 'bias' ? 5 : 1);
-        $data['strategy_id'] = $data['strategy_id'] ?? 'macd_rsi';
+        $data['strategy_id'] = $data['strategy_id'] ?? 'momentum';
         $data['enabled_strategies'] = $data['enabled_strategies'] ?? [$data['strategy_id']];
         $data['sl_pips'] = $data['sl_pips'] ?? 15;
         $data['tp_pips'] = $data['tp_pips'] ?? 30;

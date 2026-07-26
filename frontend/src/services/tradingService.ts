@@ -94,7 +94,13 @@ export type TradeJournalEntry = {
   status: string
   mode: string
   reason: string | null
+  signal_source?: string | null
+  confidence?: number | null
+  market_condition?: string | null
+  score_breakdown?: Record<string, number> | string | null
+  sl_tp_method?: string | null
   created_at: string | null
+  closed_at?: string | null
 }
 
 export type TradingMetrics = {
@@ -104,6 +110,30 @@ export type TradingMetrics = {
   max_drawdown: number
   sharpe_ratio: number
   total_pnl: number
+}
+
+export type EveningAiBucket = {
+  trades: number
+  win_rate_pct: number
+  avg_pnl: number
+}
+
+export type EveningAiPayload = {
+  date: string
+  summary: {
+    trades_opened: number
+    trades_closed: number
+    win_rate_pct: number
+    avg_pnl_per_trade: number
+    skips: number
+    risk_rejects: number
+    avg_confidence: number | null
+    avg_sl_distance_pips: number | null
+    avg_tp_distance_pips: number | null
+  }
+  by_strategy: Record<string, EveningAiBucket>
+  by_regime: Record<string, EveningAiBucket>
+  by_hour_utc: Record<string, EveningAiBucket>
 }
 
 export async function fetchTradingStatus() {
@@ -214,5 +244,12 @@ export async function fetchTradingReviews() {
       latest_ai_decision: AnalysisDecision | null
     }
   }>('/trading/reviews')
+  return response.data.data
+}
+
+export async function fetchEveningAiPayload(day?: string) {
+  const response = await api.get<{ data: EveningAiPayload }>('/trading/evening-ai-payload', {
+    params: day ? { day } : undefined,
+  })
   return response.data.data
 }

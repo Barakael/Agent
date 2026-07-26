@@ -72,6 +72,23 @@ export type AnalysisDecision = {
   created_at?: string
 }
 
+export type AnalysisSnapshot = {
+  symbol: string
+  price: number | null
+  regime: string | null
+  rsi: number | null
+  atr: number | null
+  epoch: number | null
+  bars: number
+  best_strategy: string | null
+  confidence: number
+  skip_reason: string | null
+  signal: string | null
+  feed_ok: boolean
+  last_tick_age_sec: number | null
+  updated_at: string | null
+}
+
 export type TradingPosition = {
   contract_id: number
   symbol: string
@@ -175,6 +192,11 @@ export async function runPreflight() {
 export async function fetchAnalysisSources() {
   const response = await api.get<{ data: Record<string, string> }>('/trading/analysis/sources')
   return response.data.data
+}
+
+export async function fetchAnalysisSnapshots() {
+  const response = await api.get<{ data: AnalysisSnapshot[] }>('/trading/analysis/snapshots')
+  return response.data.data ?? []
 }
 
 export async function fetchAnalysisDecision() {

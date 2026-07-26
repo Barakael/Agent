@@ -80,6 +80,21 @@ class TradingService
         return $this->request('GET', '/journal', ['limit' => $limit, 'offset' => $offset]);
     }
 
+    public function getDayReview(?string $day = null): array
+    {
+        $query = [];
+        if ($day) {
+            $query['day'] = $day;
+        }
+
+        return $this->request('GET', '/journal/day-review', $query);
+    }
+
+    public function saveEveningReview(array $body): array
+    {
+        return $this->request('POST', '/journal/evening-review', $body);
+    }
+
     public function metrics(): array
     {
         return $this->request('GET', '/metrics');

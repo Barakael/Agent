@@ -342,6 +342,10 @@ class TradingBot:
 
         if risk_result.decision != RiskDecision.APPROVED:
             logger.info("Signal rejected %s: %s", symbol, risk_result.reason)
+            cached = self._last_analysis.get(symbol)
+            if cached:
+                cached["skip_reason"] = risk_result.reason
+                cached["signal"] = signal.direction.value
             return
 
         if not settings.NUMBER_ENGINE_EXECUTION:
@@ -393,7 +397,14 @@ class TradingBot:
             return
 
         contract_id = str(order.get("contract_id", "")) if order else None
-        self.journal.log_trade_open(signal, risk_result, contract_id, settings.TRADING_MODE)
+        self.journal.log_trade_open(
+            signal,
+            risk_result,
+            contract_id,
+            settings.TRADING_MODE,
+            stop_loss_usd=order.get("stop_loss_usd") if order else None,
+            take_profit_usd=order.get("take_profit_usd") if order else None,
+        )
         self.risk.record_trade_opened()
         if contract_id and hold == "swing":
             self.positions.mark_swing(int(order["contract_id"]) if order and order.get("contract_id") else 0)

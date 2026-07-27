@@ -107,6 +107,8 @@ export type TradeJournalEntry = {
   stake: number
   stop_loss: number
   take_profit: number
+  stop_loss_usd?: number | null
+  take_profit_usd?: number | null
   pnl: number | null
   status: string
   mode: string

@@ -19,10 +19,19 @@ function relativeTime(iso: string | null | undefined): string {
   return d.toLocaleDateString()
 }
 
+function formatConf(confidence: number | null | undefined): string | null {
+  if (confidence == null || Number.isNaN(Number(confidence))) return null
+  return `${Number(confidence).toFixed(0)}%`
+}
+
 export default function TradeCard({ trade }: { trade: TradeJournalEntry }) {
-  const meta = [trade.signal_source, trade.confidence != null ? `conf ${trade.confidence}` : null, trade.market_condition]
+  const conf = formatConf(trade.confidence)
+  const meta = [trade.signal_source, conf ? `conf ${conf}` : null, trade.market_condition]
     .filter(Boolean)
     .join(' · ')
+  const method = trade.sl_tp_method ? ` (${trade.sl_tp_method})` : ''
+  const hasUsd =
+    trade.stop_loss_usd != null || trade.take_profit_usd != null
 
   return (
     <article className="trade-card rounded-lg border border-[color:var(--wayda-border)] bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-900/40">
@@ -53,6 +62,16 @@ export default function TradeCard({ trade }: { trade: TradeJournalEntry }) {
           <span className="ml-2 text-[color:var(--wayda-muted)]">Stake ${trade.stake}</span>
         </div>
         <span className="text-[color:var(--wayda-muted)]">{relativeTime(trade.created_at)}</span>
+      </div>
+      <div className="mt-1.5 space-y-0.5 text-[11px] text-[color:var(--wayda-muted)]">
+        <p>
+          Price SL/TP{method}: {trade.stop_loss} / {trade.take_profit}
+        </p>
+        {hasUsd ? (
+          <p>
+            Deriv USD SL/TP: ${trade.stop_loss_usd ?? '—'} / ${trade.take_profit_usd ?? '—'}
+          </p>
+        ) : null}
       </div>
     </article>
   )

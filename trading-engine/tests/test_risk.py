@@ -52,6 +52,50 @@ def test_stake_calculation_positive():
     assert stake > 0
 
 
+def test_demo_fixed_stake(monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "TRADING_MODE", "demo")
+    monkeypatch.setattr(settings, "DEMO_FIXED_STAKE_USD", 100.0)
+    gate = RiskGate()
+    assert gate.calculate_stake(10000.0, 15, "R_100") == 100.0
+
+
+def test_live_percent_stake(monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "TRADING_MODE", "live")
+    gate = RiskGate()
+    gate.risk_percent = 1.5
+    assert gate.calculate_stake(10000.0, 15, "R_100") == 150.0
+
+
+def test_unlimited_trades_when_max_zero(monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "TRADING_MODE", "demo")
+    monkeypatch.setattr(settings, "DEMO_FIXED_STAKE_USD", 100.0)
+    monkeypatch.setattr(settings, "PLAN_MAX_STAKE_USD_CEILING", 100.0)
+    gate = RiskGate()
+    gate.max_trades_per_day = 0
+    gate.reset_session(10000.0)
+    for _ in range(25):
+        gate.record_trade_opened()
+    signal = TradeSignal(
+        symbol="frxEURUSD",
+        direction=SignalDirection.BUY,
+        rsi=25.0,
+        macd=0.001,
+        macd_signal=0.0,
+        price=1.1,
+        epoch=1000,
+        reason="test",
+    )
+    result = gate.evaluate(signal, 10000.0)
+    assert result.decision == RiskDecision.APPROVED
+    assert result.stake == 100.0
+
+
 def test_risk_rejects_when_kill_switch_active():
     gate = RiskGate()
     gate.trigger_kill_switch()

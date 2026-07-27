@@ -94,7 +94,16 @@ class JournalWriter:
         risk: RiskCheckResult,
         contract_id: Optional[str] = None,
         mode: str = "log_only",
+        stop_loss_usd: Optional[float] = None,
+        take_profit_usd: Optional[float] = None,
     ) -> int:
+        from execution.orders import usd_limit_from_risk
+
+        if stop_loss_usd is None or take_profit_usd is None:
+            computed_sl, computed_tp = usd_limit_from_risk(risk)
+            stop_loss_usd = stop_loss_usd if stop_loss_usd is not None else computed_sl
+            take_profit_usd = take_profit_usd if take_profit_usd is not None else computed_tp
+
         with self.Session() as session:
             trade = TradeJournal(
                 symbol=signal.symbol,
@@ -103,6 +112,8 @@ class JournalWriter:
                 stake=risk.stake,
                 stop_loss=risk.stop_loss_price,
                 take_profit=risk.take_profit_price,
+                stop_loss_usd=stop_loss_usd,
+                take_profit_usd=take_profit_usd,
                 signal_source=getattr(signal, "strategy_id", None) or "rsi_macd_confluence",
                 rsi_at_entry=signal.rsi,
                 macd_at_entry=signal.macd,
@@ -121,6 +132,18 @@ class JournalWriter:
             )
             session.add(trade)
             session.commit()
+            logger.info(
+                "Journal open %s stake=%.2f price_sl=%.5f price_tp=%.5f "
+                "usd_sl=%.2f usd_tp=%.2f method=%s conf=%s",
+                signal.symbol,
+                risk.stake,
+                risk.stop_loss_price,
+                risk.take_profit_price,
+                stop_loss_usd or 0,
+                take_profit_usd or 0,
+                trade.sl_tp_method,
+                getattr(signal, "confidence", None),
+            )
             return trade.id
 
     def log_signal_rejected(self, signal: TradeSignal, reason: str) -> int:
@@ -430,6 +453,8 @@ class JournalWriter:
             "stake": r.stake,
             "stop_loss": r.stop_loss,
             "take_profit": r.take_profit,
+            "stop_loss_usd": getattr(r, "stop_loss_usd", None),
+            "take_profit_usd": getattr(r, "take_profit_usd", None),
             "pnl": r.pnl,
             "status": r.status,
             "mode": r.mode,

@@ -140,7 +140,9 @@ class RiskGate:
         return PIP_SIZE.get(symbol, 0.0001)
 
     def calculate_stake(self, balance: float, sl_pips: int, symbol: str) -> float:
-        """USD stake for multipliers = % of balance risked (not FX lot sizing)."""
+        """Demo: fixed DEMO_FIXED_STAKE_USD. Live: % of balance (not FX lot sizing)."""
+        if settings.TRADING_MODE == "demo":
+            return max(1.0, round(float(settings.DEMO_FIXED_STAKE_USD), 2))
         if sl_pips <= 0 or balance <= 0:
             return 0.0
         stake = balance * (self.risk_percent / 100.0)
@@ -214,7 +216,8 @@ class RiskGate:
                 decision=RiskDecision.REJECTED,
                 reason="Insufficient balance",
             )
-        if self._trades_today >= self.max_trades_per_day:
+        # MAX_TRADES_PER_DAY <= 0 means unlimited (demo data collection)
+        if self.max_trades_per_day > 0 and self._trades_today >= self.max_trades_per_day:
             return RiskCheckResult(
                 decision=RiskDecision.REJECTED,
                 reason=f"Max trades today ({self.max_trades_per_day}) reached",
@@ -242,10 +245,14 @@ class RiskGate:
                 decision=RiskDecision.REJECTED,
                 reason="Stake calculation failed",
             )
-        hard_ceiling = float(getattr(settings, "PLAN_MAX_STAKE_USD_CEILING", 50.0))
-        stake = min(stake, hard_ceiling)
-        if max_stake_usd is not None and max_stake_usd > 0:
-            stake = min(stake, float(max_stake_usd))
+        # Live: apply ceiling + daily-plan max. Demo keeps fixed stake (ceiling as safety only).
+        hard_ceiling = float(getattr(settings, "PLAN_MAX_STAKE_USD_CEILING", 100.0))
+        if settings.TRADING_MODE == "demo":
+            stake = min(stake, hard_ceiling)
+        else:
+            stake = min(stake, hard_ceiling)
+            if max_stake_usd is not None and max_stake_usd > 0:
+                stake = min(stake, float(max_stake_usd))
 
         return RiskCheckResult(
             decision=RiskDecision.APPROVED,

@@ -71,18 +71,21 @@ class Settings(BaseSettings):
 
     # Strategy Manager
     STRATEGY_CONFIDENCE_THRESHOLD: float = float(
-        os.getenv("STRATEGY_CONFIDENCE_THRESHOLD", "70")
+        os.getenv("STRATEGY_CONFIDENCE_THRESHOLD", "88")
     )
     ATR_SL_MULTIPLIER: float = float(os.getenv("ATR_SL_MULTIPLIER", "1.5"))
     DEFAULT_RR_RATIO: float = float(os.getenv("DEFAULT_RR_RATIO", "2.0"))
 
     # Risk (moderate profile)
     RISK_PERCENT_PER_TRADE: float = float(os.getenv("RISK_PERCENT_PER_TRADE", "1.5"))
+    # Demo: fixed USD stake. Live: balance × RISK_PERCENT_PER_TRADE
+    DEMO_FIXED_STAKE_USD: float = float(os.getenv("DEMO_FIXED_STAKE_USD", "100"))
     DAILY_DRAWDOWN_LIMIT_PERCENT: float = float(
         os.getenv("DAILY_DRAWDOWN_LIMIT_PERCENT", "4.0")
     )
     MAX_DAILY_PROFIT_PERCENT: float = float(os.getenv("MAX_DAILY_PROFIT_PERCENT", "8.0"))
-    MAX_TRADES_PER_DAY: int = int(os.getenv("MAX_TRADES_PER_DAY", "20"))
+    # 0 = unlimited (demo data collection)
+    MAX_TRADES_PER_DAY: int = int(os.getenv("MAX_TRADES_PER_DAY", "0"))
     DEFAULT_SL_PIPS: int = int(os.getenv("DEFAULT_SL_PIPS", "15"))
     DEFAULT_TP_PIPS: int = int(os.getenv("DEFAULT_TP_PIPS", "30"))
     TRAILING_STOP_ENABLED: bool = os.getenv("TRAILING_STOP_ENABLED", "false").lower() == "true"
@@ -93,7 +96,7 @@ class Settings(BaseSettings):
 
     # Daily plan clamps (automation callback)
     PLAN_RISK_PERCENT_MAX: float = float(os.getenv("PLAN_RISK_PERCENT_MAX", "2.0"))
-    PLAN_MAX_STAKE_USD_CEILING: float = float(os.getenv("PLAN_MAX_STAKE_USD_CEILING", "50"))
+    PLAN_MAX_STAKE_USD_CEILING: float = float(os.getenv("PLAN_MAX_STAKE_USD_CEILING", "100"))
 
     # Session — force close all positions before this time (UTC)
     # SESSION_ENFORCE=false for 24/7 synthetics (no open/close window)

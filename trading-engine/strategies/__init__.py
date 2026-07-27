@@ -103,7 +103,7 @@ class StrategyManager:
         self.confidence_threshold = (
             confidence_threshold
             if confidence_threshold is not None
-            else float(getattr(settings, "STRATEGY_CONFIDENCE_THRESHOLD", 70.0))
+            else float(getattr(settings, "STRATEGY_CONFIDENCE_THRESHOLD", 88.0))
         )
 
     def select(

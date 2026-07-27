@@ -285,8 +285,8 @@ export default function TradingPage() {
 
       <SectionCard title="Live analysis" icon={Activity} className="mb-4">
         <p className="mb-3 text-xs text-[color:var(--wayda-muted)]">
-          Number Engine on each Deriv pair (updates on candle close). Empty journal does not mean idle —
-          watch price, regime, and confidence here.
+          Number Engine on each Deriv pair (updates on candle close). Confidence must be ≥88% to open.
+          Skip/reject reasons appear when a signal exists but is not traded.
         </p>
         {snapshots.length === 0 ? (
           <EmptyState
@@ -309,12 +309,17 @@ export default function TradingPage() {
                   </div>
                   <div className="mt-1 font-mono-metric text-[color:var(--wayda-muted)]">
                     {row.price != null ? row.price.toFixed(2) : '—'} · {row.regime ?? '—'} · RSI{' '}
-                    {row.rsi ?? '—'} · conf {row.confidence}
+                    {row.rsi ?? '—'} · conf {row.confidence}%
+                    {row.confidence > 0 && row.confidence < 88 ? ' (below 88)' : ''}
                   </div>
                   <div className="mt-1 text-[color:var(--wayda-muted)]">
-                    {row.signal
-                      ? `Signal ${row.signal} · ${row.best_strategy ?? ''}`
-                      : row.skip_reason ?? '—'}
+                    {row.signal && !row.skip_reason
+                      ? `Opening ${row.signal} · ${row.best_strategy ?? ''}`
+                      : row.skip_reason
+                        ? row.skip_reason
+                        : row.signal
+                          ? `Signal ${row.signal} · ${row.best_strategy ?? ''}`
+                          : '—'}
                   </div>
                 </div>
               ))}
@@ -328,8 +333,8 @@ export default function TradingPage() {
                     <th>Regime</th>
                     <th>RSI</th>
                     <th>Strategy</th>
-                    <th>Conf</th>
-                    <th>Status</th>
+                    <th>Conf %</th>
+                    <th>Skip / status</th>
                     <th>Feed</th>
                   </tr>
                 </thead>
@@ -343,9 +348,31 @@ export default function TradingPage() {
                       <td>{row.regime ?? '—'}</td>
                       <td className="font-mono-metric">{row.rsi ?? '—'}</td>
                       <td>{row.best_strategy ?? '—'}</td>
-                      <td className="font-mono-metric">{row.confidence}</td>
-                      <td className="max-w-[14rem] truncate" title={row.skip_reason ?? row.signal ?? ''}>
-                        {row.signal ? `signal ${row.signal}` : row.skip_reason ?? '—'}
+                      <td
+                        className={`font-mono-metric ${
+                          row.confidence > 0 && row.confidence < 88
+                            ? 'text-amber-600'
+                            : row.confidence >= 88
+                              ? 'text-emerald-600'
+                              : ''
+                        }`}
+                        title={
+                          row.confidence > 0 && row.confidence < 88
+                            ? `${row.confidence}% < 88% gate`
+                            : undefined
+                        }
+                      >
+                        {row.confidence}%
+                      </td>
+                      <td
+                        className="max-w-[16rem] truncate"
+                        title={row.skip_reason ?? (row.signal ? `signal ${row.signal}` : '')}
+                      >
+                        {row.skip_reason
+                          ? row.skip_reason
+                          : row.signal
+                            ? `signal ${row.signal}`
+                            : '—'}
                       </td>
                       <td className={row.feed_ok ? 'text-emerald-600' : 'text-amber-600'}>
                         {row.feed_ok
@@ -610,9 +637,10 @@ export default function TradingPage() {
                     <th>Symbol</th>
                     <th>Dir</th>
                     <th>Strategy</th>
-                    <th>Conf</th>
+                    <th>Conf %</th>
                     <th>Regime</th>
-                    <th>Entry</th>
+                    <th>Stake</th>
+                    <th>SL/TP</th>
                     <th>P&L</th>
                     <th>Status</th>
                   </tr>
@@ -623,9 +651,23 @@ export default function TradingPage() {
                       <td>{t.symbol}</td>
                       <td className="uppercase">{t.direction}</td>
                       <td className="text-xs">{t.signal_source ?? '—'}</td>
-                      <td className="font-mono-metric">{t.confidence != null ? t.confidence : '—'}</td>
+                      <td className="font-mono-metric">
+                        {t.confidence != null ? `${t.confidence}%` : '—'}
+                      </td>
                       <td className="text-xs">{t.market_condition ?? '—'}</td>
-                      <td className="font-mono-metric">{t.entry_price}</td>
+                      <td className="font-mono-metric">${t.stake}</td>
+                      <td
+                        className="max-w-[10rem] truncate text-xs font-mono-metric"
+                        title={
+                          t.stop_loss_usd != null
+                            ? `Price ${t.stop_loss}/${t.take_profit} · USD $${t.stop_loss_usd}/$${t.take_profit_usd}`
+                            : `Price ${t.stop_loss}/${t.take_profit}`
+                        }
+                      >
+                        {t.stop_loss_usd != null
+                          ? `$${t.stop_loss_usd}/$${t.take_profit_usd}`
+                          : `${t.stop_loss}/${t.take_profit}`}
+                      </td>
                       <td className="font-mono-metric">{t.pnl ?? '—'}</td>
                       <td>
                         <span className="status-pill">{t.status}</span>

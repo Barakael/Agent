@@ -23,6 +23,9 @@ class TradeJournal(Base):
     stake = Column(Float, nullable=False)
     stop_loss = Column(Float, nullable=False)
     take_profit = Column(Float, nullable=False)
+    # Deriv multiplier limit_order amounts (USD P/L); journal SL/TP columns are chart prices
+    stop_loss_usd = Column(Float, nullable=True)
+    take_profit_usd = Column(Float, nullable=True)
     pnl = Column(Float, nullable=True)
     signal_source = Column(String(64), default="confluence")
     rsi_at_entry = Column(Float, nullable=True)
@@ -115,6 +118,8 @@ def _ensure_columns(engine) -> None:
         ("trade_journal", "market_condition", "VARCHAR(32)"),
         ("trade_journal", "score_breakdown", "TEXT"),
         ("trade_journal", "sl_tp_method", "VARCHAR(32)"),
+        ("trade_journal", "stop_loss_usd", "FLOAT"),
+        ("trade_journal", "take_profit_usd", "FLOAT"),
         ("signal_logs", "strategy_id", "VARCHAR(64)"),
         ("signal_logs", "confidence", "FLOAT"),
         ("signal_logs", "market_condition", "VARCHAR(32)"),

@@ -11,7 +11,9 @@ export type TradingStatus = {
   is_demo?: boolean
   account_type?: 'demo' | 'live'
   account_error?: string | null
-  analysis_armed?: boolean
+    analysis_armed?: boolean
+  number_engine_execution?: boolean
+  auto_start_bot?: boolean
   preflight?: PreflightSnapshot | null
   sources?: Record<string, string>
   session?: {
@@ -110,6 +112,7 @@ export type TradeJournalEntry = {
   stop_loss_usd?: number | null
   take_profit_usd?: number | null
   pnl: number | null
+  sold_for?: number | null
   status: string
   mode: string
   reason: string | null
@@ -118,6 +121,7 @@ export type TradeJournalEntry = {
   market_condition?: string | null
   score_breakdown?: Record<string, number> | string | null
   sl_tp_method?: string | null
+  contract_id?: string | null
   created_at: string | null
   closed_at?: string | null
 }
@@ -165,7 +169,7 @@ export async function fetchTradingPositions() {
   return response.data.data
 }
 
-export async function fetchTradingJournal(limit = 50) {
+export async function fetchTradingJournal(limit = 100) {
   const response = await api.get<{ data: TradeJournalEntry[] }>('/trading/journal', {
     params: { limit },
   })

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -46,15 +47,22 @@ def validate_api_key(
 async def lifespan(app: FastAPI):
     global bot
     bot = TradingBot()
-    journal.update_bot_state("stopped", settings.TRADING_MODE, 0.0)
+    try:
+        journal.update_bot_state("stopped", settings.TRADING_MODE, 0.0)
+    except Exception:
+        logger.exception("Could not update bot state on startup — continuing")
     if settings.AUTO_START_BOT:
-        try:
-            await bot.start()
-            logger.info("AUTO_START_BOT: trading loop started")
-        except Exception:
-            logger.exception(
-                "AUTO_START_BOT failed — API is up; call POST /start when ready"
-            )
+        # Start in background so uvicorn binds immediately (preflight can take minutes)
+        async def _auto_start() -> None:
+            try:
+                await bot.start()
+                logger.info("AUTO_START_BOT: trading loop started")
+            except Exception:
+                logger.exception(
+                    "AUTO_START_BOT failed — API is up; call POST /start when ready"
+                )
+
+        asyncio.create_task(_auto_start())
     yield
     if bot:
         await bot.stop()

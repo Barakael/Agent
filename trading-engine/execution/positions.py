@@ -26,6 +26,7 @@ class PositionManager:
         self._close_gate = close_gate
         self._cached: List[dict] = []
         self._swing_contract_ids: set[int] = set()
+        self._profit_table_cache: dict[str, dict] = {}
 
     def mark_swing(self, contract_id: int) -> None:
         if contract_id:
@@ -36,11 +37,119 @@ class PositionManager:
             self._cached = await self.client.get_open_positions()
         except Exception:
             logger.exception("Failed to refresh positions")
+            return self._cached
+        try:
+            await self.reconcile_closed_journal()
+        except Exception:
+            logger.exception("Failed to reconcile closed journal trades")
         return self._cached
 
     @property
     def positions(self) -> List[dict]:
         return self._cached
+
+    async def _load_profit_table(self) -> dict[str, dict]:
+        if self._profit_table_cache:
+            return self._profit_table_cache
+        try:
+            rows = await self.client.get_profit_table(limit=100)
+        except Exception:
+            logger.warning("Profit table unavailable for reconcile", exc_info=True)
+            rows = []
+        cache: dict[str, dict] = {}
+        for row in rows:
+            cid = row.get("contract_id")
+            if cid is not None:
+                cache[str(cid)] = row
+        self._profit_table_cache = cache
+        return cache
+
+    async def reconcile_closed_journal(self) -> int:
+        """Mark journal opens closed when Deriv portfolio no longer lists them (SL/TP)."""
+        if not self.journal:
+            return 0
+        open_rows = self.journal.list_open_trades_with_contracts(max_age_hours=48)
+        if not open_rows:
+            return 0
+        live_ids = {
+            str(p.get("contract_id"))
+            for p in self._cached
+            if p.get("contract_id") is not None
+        }
+        missing = [r for r in open_rows if r["contract_id"] not in live_ids]
+        if not missing:
+            return 0
+
+        # Refresh profit table once per reconcile batch
+        self._profit_table_cache = {}
+        await self._load_profit_table()
+
+        closed_n = 0
+        for row in missing:
+            cid = row["contract_id"]
+            try:
+                cid_int = int(cid)
+            except (TypeError, ValueError):
+                continue
+            sold_for, pnl, trusted = await self._resolve_close_amounts(
+                cid_int, stake=row["stake"]
+            )
+            self.journal.log_trade_close(int(row["id"]), sold_for, pnl)
+            # Only apply PnL to risk when Deriv returned real numbers (avoid kill-switch from guesses)
+            if trusted and self.risk:
+                self.risk.record_pnl(pnl)
+            self._swing_contract_ids.discard(cid_int)
+            closed_n += 1
+            logger.info(
+                "Reconciled auto-close contract_id=%s sold_for=%.2f pnl=%+.2f trusted=%s",
+                cid,
+                sold_for,
+                pnl,
+                trusted,
+            )
+        return closed_n
+
+    async def _resolve_close_amounts(
+        self, contract_id: int, *, stake: float = 0.0
+    ) -> tuple[float, float, bool]:
+        """Return (sold_for, pnl, trusted) for a contract no longer in the open portfolio."""
+        # Prefer profit_table (reliable for closed contracts)
+        pt = (await self._load_profit_table()).get(str(contract_id))
+        if pt:
+            buy = float(pt.get("buy_price") or stake or 0)
+            sold_for = float(pt.get("sell_price") or pt.get("sold_for") or 0)
+            if pt.get("profit") is not None:
+                pnl = float(pt["profit"])
+            else:
+                pnl = sold_for - buy
+            if sold_for <= 0 and buy:
+                sold_for = max(0.0, buy + pnl)
+            return round(sold_for, 2), round(pnl, 2), True
+
+        try:
+            detail = await self.client.get_contract(contract_id)
+        except Exception:
+            logger.warning(
+                "Could not fetch closed contract %s — closing journal without risk PnL",
+                contract_id,
+                exc_info=True,
+            )
+            # Unknown outcome: mark closed with zero cash, do not poison daily PnL
+            return 0.0, 0.0, False
+
+        sold_for = float(detail.get("sell_price") or detail.get("sold_for") or 0)
+        buy = float(detail.get("buy_price") or stake or 0)
+        if detail.get("profit") is not None:
+            pnl = float(detail["profit"])
+            trusted = True
+        elif sold_for > 0 or buy > 0:
+            pnl = sold_for - buy
+            trusted = sold_for > 0
+        else:
+            return 0.0, 0.0, False
+        if sold_for <= 0 and buy:
+            sold_for = max(0.0, buy + pnl)
+        return round(sold_for, 2), round(pnl, 2), trusted
 
     async def close_position(
         self,
@@ -64,13 +173,19 @@ class PositionManager:
     def _record_close_pnl(self, contract_id: int, pos: dict, result: dict) -> None:
         if not self.journal:
             return
-        pnl = float(result.get("profit") or result.get("sold_for") or pos.get("profit") or 0)
-        exit_price = float(result.get("sold_for") or pos.get("sell_price") or 0)
+        sold_for = float(result.get("sold_for") or result.get("sell_price") or 0)
+        buy = float(pos.get("buy_price") or 0)
+        if result.get("profit") is not None:
+            pnl = float(result["profit"])
+        else:
+            pnl = sold_for - buy if (sold_for or buy) else 0.0
+        if sold_for <= 0 and buy:
+            sold_for = max(0.0, buy + pnl)
         trade_id = self.journal.get_open_trade_by_contract_id(str(contract_id))
         if trade_id:
-            self.journal.log_trade_close(trade_id, exit_price, pnl)
+            self.journal.log_trade_close(trade_id, round(sold_for, 2), round(pnl, 2))
         if self.risk:
-            self.risk.record_pnl(pnl)
+            self.risk.record_pnl(round(pnl, 2))
 
     async def close_all(
         self,

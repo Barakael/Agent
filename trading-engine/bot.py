@@ -108,9 +108,12 @@ class TradingBot:
         self.journal.update_bot_state("paused", settings.TRADING_MODE, self.risk.daily_pnl)
 
     def resume(self) -> None:
-        if not self.risk.kill_switch_active:
-            self._paused = False
-            self.journal.update_bot_state("running", settings.TRADING_MODE, self.risk.daily_pnl)
+        # Operator resume also clears daily kill switch so trading can continue after a false trip
+        if self.risk.kill_switch_active:
+            self.risk._kill_switch_active = False
+            logger.warning("Kill switch cleared by resume")
+        self._paused = False
+        self.journal.update_bot_state("running", settings.TRADING_MODE, self.risk.daily_pnl)
 
     def kill(self, reason: str = "manual") -> None:
         self.risk.trigger_kill_switch(reason)
@@ -418,6 +421,11 @@ class TradingBot:
 
     async def _session_watchdog(self) -> None:
         while self._running:
+            try:
+                if self.client._socket_alive():
+                    await self.positions.refresh()
+            except Exception:
+                logger.debug("Session watchdog position refresh failed", exc_info=True)
             if self.session.must_force_close():
                 logger.warning("End of session — force closing intraday positions (swing kept)")
                 await self._close_all_positions(force=True, skip_swing=True)
@@ -449,13 +457,33 @@ class TradingBot:
             return False
 
     async def _feed_watchdog(self) -> None:
-        """Retry Deriv tick subscriptions when markets reopen (weekend/holiday)."""
+        """Retry Deriv tick subscriptions when markets reopen or the socket drops."""
         while self._running:
             missing = [s for s in self.active_pairs if s not in self._subscribed_symbols]
-            if missing and self.client._ws is not None:
-                for symbol in missing:
-                    await self._ensure_symbol_feed(symbol)
-            await asyncio.sleep(60)
+            sleep_for = 30.0
+            if missing and settings.DERIV_API_TOKEN:
+                try:
+                    if not self.client._socket_alive():
+                        wait = self.client.seconds_until_reconnect()
+                        if wait > 0:
+                            logger.info("Feed watchdog waiting %.0fs (reconnect backoff)", wait)
+                            sleep_for = min(wait, 30.0)
+                        else:
+                            await self.client.ensure_connected()
+                            self._account_probe_error = None
+                    if self.client._socket_alive():
+                        for symbol in missing:
+                            await self._ensure_symbol_feed(symbol)
+                except Exception as exc:
+                    self._account_probe_error = self._format_deriv_error(exc)
+                    delay = self.client.seconds_until_reconnect() or 30.0
+                    sleep_for = min(max(delay, 30.0), 300.0)
+                    logger.warning(
+                        "Feed watchdog reconnect failed: %s (next try in %.0fs)",
+                        exc,
+                        sleep_for,
+                    )
+            await asyncio.sleep(sleep_for)
 
     async def probe_deriv_account(self) -> None:
         if self._account_probed or self._running or not settings.DERIV_API_TOKEN:
@@ -474,20 +502,22 @@ class TradingBot:
 
     async def run_preflight(self) -> dict:
         pairs = self.active_pairs
-        client = self.client if self._running and self.client._ws else None
-        if not client and settings.DERIV_API_TOKEN:
+        ephemeral = False
+        if self.client._ws is None and settings.DERIV_API_TOKEN:
             await self.client.connect()
-            try:
-                await self.client.authorize()
-                snapshot = await self.analysis.run_preflight(
-                    client=self.client, symbols=pairs
-                )
-            finally:
-                if not self._running:
-                    await self.client.disconnect()
+            await self.client.authorize()
+            ephemeral = True
+        try:
+            snapshot = await self.analysis.run_preflight(
+                client=self.client if self.client._ws else None,
+                symbols=pairs,
+            )
             return snapshot.to_dict()
-        snapshot = await self.analysis.run_preflight(client=client, symbols=pairs)
-        return snapshot.to_dict()
+        finally:
+            # Only tear down a one-off connection opened for /preflight while the bot is stopped.
+            # Never disconnect when start() already authorized — that killed feeds after restart.
+            if ephemeral and not self._running:
+                await self.client.disconnect()
 
     async def start(self) -> None:
         if self._running:
@@ -526,6 +556,9 @@ class TradingBot:
             logger.warning("No DERIV_API_TOKEN — running in offline/simulated mode")
 
         await self.calendar.refresh()
+        if settings.NUMBER_ENGINE_EXECUTION:
+            # Arm immediately so UI/status are not blocked while preflight backtests run
+            self.analysis.analysis_armed = True
         try:
             await self.run_preflight()
         except Exception:
@@ -533,20 +566,45 @@ class TradingBot:
                 logger.exception(
                     "Preflight failed on start — continuing Number Engine loop anyway"
                 )
+                self.analysis.analysis_armed = True
             else:
                 logger.exception("Preflight failed on start — bot will not arm")
 
-        if deriv_connected or market_data_only or self.client._ws is not None:
+        # Only reconnect when the socket is actually dead — do not tear down a healthy OTP session.
+        if settings.DERIV_API_TOKEN and (deriv_connected or market_data_only):
+            if not self.client._socket_alive():
+                try:
+                    await self.client.ensure_connected()
+                    deriv_connected = True
+                    self._account_probe_error = None
+                except Exception as exc:
+                    self._account_probe_error = self._format_deriv_error(exc)
+                    logger.exception("Deriv ensure_connected before feeds failed")
+            else:
+                logger.info("Deriv socket still authorized — skipping ensure_connected")
+
+        if self.client._socket_alive() or market_data_only:
             self._subscribed_symbols.clear()
             for symbol in self.active_pairs:
                 await self._ensure_symbol_feed(symbol)
             self.client.on_tick(self._on_tick)
+            if self._subscribed_symbols:
+                deriv_connected = True
+                self._account_probe_error = None
 
         self._running = True
         self._paused = False
         self.journal.update_bot_state("running", settings.TRADING_MODE, self.risk.daily_pnl)
         self._task = asyncio.create_task(self._session_watchdog())
         self._feed_task = asyncio.create_task(self._feed_watchdog())
+
+        # Seed Live analysis immediately (don't wait up to 5m for first candle close)
+        for symbol in list(self._subscribed_symbols):
+            try:
+                await self._on_candle_close(symbol)
+            except Exception:
+                logger.exception("Initial analysis failed for %s", symbol)
+
         logger.info(
             "Trading bot started mode=%s number_engine=%s armed=%s deriv=%s pairs=%s subscribed=%s",
             settings.TRADING_MODE,

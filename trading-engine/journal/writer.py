@@ -213,6 +213,35 @@ class JournalWriter:
             )
             return row.id if row else None
 
+    def list_open_trades_with_contracts(self, max_age_hours: int = 48) -> list[dict]:
+        """Open journal rows that have a Deriv contract_id (for reconcile)."""
+        cutoff = datetime.now(timezone.utc)
+        from datetime import timedelta
+
+        oldest = cutoff - timedelta(hours=max_age_hours)
+        with self.Session() as session:
+            rows = (
+                session.query(TradeJournal)
+                .filter(
+                    TradeJournal.status == "open",
+                    TradeJournal.contract_id.isnot(None),
+                    TradeJournal.contract_id != "",
+                    TradeJournal.created_at >= oldest,
+                )
+                .order_by(TradeJournal.created_at.desc())
+                .limit(200)
+                .all()
+            )
+            return [
+                {
+                    "id": r.id,
+                    "contract_id": str(r.contract_id),
+                    "symbol": r.symbol,
+                    "stake": float(r.stake or 0),
+                }
+                for r in rows
+            ]
+
     def log_trade_close(self, trade_id: int, exit_price: float, pnl: float) -> None:
         with self.Session() as session:
             trade = session.get(TradeJournal, trade_id)
@@ -222,6 +251,12 @@ class JournalWriter:
                 trade.status = "closed"
                 trade.closed_at = datetime.now(timezone.utc)
                 session.commit()
+                logger.info(
+                    "Journal close id=%s sold_for=%.2f pnl=%+.2f",
+                    trade_id,
+                    exit_price,
+                    pnl,
+                )
 
     def update_bot_state(self, state: str, mode: str, daily_pnl: float) -> None:
         with self.Session() as session:
@@ -450,6 +485,8 @@ class JournalWriter:
             "direction": r.direction,
             "entry_price": r.entry_price,
             "exit_price": r.exit_price,
+            # Multiplier closes store Deriv sold_for in exit_price
+            "sold_for": r.exit_price if r.status == "closed" else None,
             "stake": r.stake,
             "stop_loss": r.stop_loss,
             "take_profit": r.take_profit,
@@ -464,6 +501,7 @@ class JournalWriter:
             "market_condition": getattr(r, "market_condition", None),
             "score_breakdown": breakdown,
             "sl_tp_method": getattr(r, "sl_tp_method", None),
+            "contract_id": r.contract_id,
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "closed_at": r.closed_at.isoformat() if r.closed_at else None,
         }

@@ -29,8 +29,20 @@ class PlanStore:
             raw = json.loads(self.path.read_text())
             self._cached = clamp_plan_dict(raw)
             return self._cached
-        except Exception:
-            logger.exception("Failed to load active plan from %s", self.path)
+        except Exception as exc:
+            # Quarantine invalid plans (e.g. forex pairs after switching to synthetics)
+            # so status polling does not spam stack traces every few seconds.
+            logger.warning("Ignoring invalid active plan at %s: %s", self.path, exc)
+            try:
+                bad = self.path.with_name(self.path.name + ".invalid")
+                if bad.exists():
+                    bad.unlink()
+                self.path.replace(bad)
+            except Exception:
+                try:
+                    self.path.unlink(missing_ok=True)
+                except Exception:
+                    pass
             return None
 
     def save(self, plan: DailyPlan) -> DailyPlan:

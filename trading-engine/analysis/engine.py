@@ -130,7 +130,20 @@ class AnalysisEngine:
             reasons.append("kill_switch_active")
 
         runner = BacktestRunner()
-        if client and settings.DERIV_API_TOKEN:
+        if settings.NUMBER_ENGINE_EXECUTION:
+            # Avoid long Deriv history fetches that drop the live WebSocket during bot start.
+            # Number Engine trades on confidence + RiskGate; ATAE backtests are advisory only.
+            backtest = {
+                symbol: {
+                    "passed": True,
+                    "skipped": True,
+                    "note": "number_engine_execution",
+                    "win_rate": 0,
+                    "total_trades": 0,
+                }
+                for symbol in pairs
+            }
+        elif client and settings.DERIV_API_TOKEN:
             backtest = {}
             for symbol in pairs:
                 try:
@@ -207,7 +220,20 @@ class AnalysisEngine:
             if ai.get("decision") == "NO-GO":
                 reasons.append(f"ai_no_go: {ai.get('summary', '')[:120]}")
 
-        # Soften: if all failures are backtest_failed_* but at least one pair has positive expectancy, allow GO
+        # Soften: Number Engine mode does not require ATAE backtest arming
+        if settings.NUMBER_ENGINE_EXECUTION and reasons:
+            only_backtest = all(
+                r.startswith("backtest_failed_")
+                or r.startswith("backtest_error_")
+                or r.startswith("ai_no_go")
+                for r in reasons
+            )
+            if only_backtest:
+                reasons = []
+                sources["preflight_soft_pass"] = True
+                sources["number_engine_bypass"] = True
+
+        # Soften: if all failures are backtest_* but at least one pair has positive expectancy, allow GO
         if reasons and all(r.startswith("backtest_failed_") or r.startswith("backtest_error_") for r in reasons):
             soft = False
             for result in backtest.values():
@@ -229,8 +255,12 @@ class AnalysisEngine:
         )
         self.journal.log_analysis_run(snapshot)
         self.last_preflight = snapshot.to_dict()
-        self.analysis_armed = passed and settings.ANALYSIS_REQUIRE_PREFLIGHT
-        if not settings.ANALYSIS_REQUIRE_PREFLIGHT:
+        if settings.NUMBER_ENGINE_EXECUTION:
+            # Number Engine uses confidence gate, not ATAE arming
+            self.analysis_armed = True
+        elif settings.ANALYSIS_REQUIRE_PREFLIGHT:
+            self.analysis_armed = passed
+        else:
             self.analysis_armed = passed
         logger.info("Preflight %s armed=%s reasons=%s", snapshot.decision, self.analysis_armed, reasons)
         return snapshot

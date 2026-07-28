@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     DERIV_MULTIPLIER: float = float(os.getenv("DERIV_MULTIPLIER", "80"))
 
     # Analysis engine (ATAE) — optional when NUMBER_ENGINE_EXECUTION is on
-    ANALYSIS_REQUIRE_PREFLIGHT: bool = os.getenv("ANALYSIS_REQUIRE_PREFLIGHT", "true").lower() == "true"
+    ANALYSIS_REQUIRE_PREFLIGHT: bool = os.getenv("ANALYSIS_REQUIRE_PREFLIGHT", "false").lower() == "true"
     ANALYSIS_SCENARIO_WINDOW_BARS: int = int(os.getenv("ANALYSIS_SCENARIO_WINDOW_BARS", "50"))
     ANALYSIS_MIN_SCENARIO_WIN_RATE: float = float(os.getenv("ANALYSIS_MIN_SCENARIO_WIN_RATE", "0.45"))
     ANALYSIS_PREFLIGHT_BACKTEST_BARS: int = int(os.getenv("ANALYSIS_PREFLIGHT_BACKTEST_BARS", "500"))

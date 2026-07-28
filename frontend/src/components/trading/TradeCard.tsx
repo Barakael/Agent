@@ -47,7 +47,13 @@ export default function TradeCard({ trade }: { trade: TradeJournalEntry }) {
       </div>
       <div className="mt-2 flex flex-wrap items-end justify-between gap-2 text-xs">
         <div className="font-mono-metric">
-          <span className="text-[color:var(--wayda-muted)]">PnL </span>
+          <span className="text-[color:var(--wayda-muted)]">Stake ${Number(trade.stake).toFixed(2)}</span>
+          {trade.status === 'closed' && (trade.sold_for ?? trade.exit_price) != null ? (
+            <span className="ml-2 text-[color:var(--wayda-muted)]">
+              Sold ${Number(trade.sold_for ?? trade.exit_price).toFixed(2)}
+            </span>
+          ) : null}
+          <span className="ml-2 text-[color:var(--wayda-muted)]">PnL </span>
           <span
             className={
               trade.pnl != null && trade.pnl < 0
@@ -57,9 +63,10 @@ export default function TradeCard({ trade }: { trade: TradeJournalEntry }) {
                   : ''
             }
           >
-            {trade.pnl != null ? `$${trade.pnl}` : '—'}
+            {trade.pnl != null
+              ? `${trade.pnl > 0 ? '+' : ''}$${Number(trade.pnl).toFixed(2)}`
+              : '—'}
           </span>
-          <span className="ml-2 text-[color:var(--wayda-muted)]">Stake ${trade.stake}</span>
         </div>
         <span className="text-[color:var(--wayda-muted)]">{relativeTime(trade.created_at)}</span>
       </div>

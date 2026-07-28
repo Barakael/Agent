@@ -37,6 +37,9 @@ class DerivWebSocketClient:
         self._is_demo: bool = False
         self._market_data_only: bool = False
         self._listen_task: Optional[asyncio.Task] = None
+        # Reconnect backoff (seconds since epoch of next allowed attempt)
+        self._reconnect_after: float = 0.0
+        self._reconnect_backoff_sec: float = 30.0
 
     def _next_id(self) -> int:
         self._req_id += 1
@@ -84,14 +87,20 @@ class DerivWebSocketClient:
                 await self._listen_task
             except asyncio.CancelledError:
                 pass
+            self._listen_task = None
         if self._ws:
-            await self._ws.close()
+            try:
+                await self._ws.close()
+            except Exception:
+                pass
             self._ws = None
+        self._authorized = False
 
     async def _listen(self) -> None:
-        assert self._ws is not None
+        ws = self._ws
+        assert ws is not None
         try:
-            async for raw in self._ws:
+            async for raw in ws:
                 msg = json.loads(raw)
                 req_id = msg.get("req_id")
                 if req_id is not None and req_id in self._pending:
@@ -113,6 +122,71 @@ class DerivWebSocketClient:
             raise
         except Exception:
             logger.exception("WebSocket listen loop failed")
+        finally:
+            # Only clear if this listener still owns the current socket (OTP reconnect
+            # cancels the old listener after installing a new _ws — must not wipe it).
+            if self._ws is ws:
+                self._ws = None
+                self._authorized = False
+
+    def _uses_otp_auth(self) -> bool:
+        token = str(self.api_token or "")
+        is_pat = token.startswith("pat_")
+        app_id = settings.DERIV_APP_ID.strip()
+        is_new_app = bool(app_id) and not app_id.isdigit()
+        return is_pat and is_new_app
+
+    def _socket_alive(self) -> bool:
+        if self._ws is None or not self._authorized:
+            return False
+        try:
+            return not bool(getattr(self._ws, "closed", False))
+        except Exception:
+            return False
+
+    def note_reconnect_success(self) -> None:
+        self._reconnect_after = 0.0
+        self._reconnect_backoff_sec = 30.0
+
+    def note_reconnect_failure(self) -> float:
+        """Record failure; return seconds to wait before next attempt."""
+        import time as _time
+
+        delay = self._reconnect_backoff_sec
+        self._reconnect_after = _time.time() + delay
+        self._reconnect_backoff_sec = min(delay * 2.0, 300.0)
+        return delay
+
+    def seconds_until_reconnect(self) -> float:
+        import time as _time
+
+        if self._reconnect_after <= 0:
+            return 0.0
+        return max(0.0, self._reconnect_after - _time.time())
+
+    async def ensure_connected(self) -> dict:
+        """Connect + authorize if the socket is missing or dead."""
+        if self._socket_alive():
+            return {"balance": self._balance, "loginid": self._loginid}
+
+        wait = self.seconds_until_reconnect()
+        if wait > 0:
+            raise RuntimeError(f"Deriv reconnect backoff: retry in {wait:.0f}s")
+
+        await self.disconnect()
+        try:
+            if self._uses_otp_auth():
+                # OTP path fetches a fresh single-use URL and reconnects itself.
+                # Do NOT open legacy app_id=1089 first — that often returns HTTP 401.
+                result = await self.authorize()
+            else:
+                await self.connect()
+                result = await self.authorize()
+            self.note_reconnect_success()
+            return result if result else {"balance": self._balance, "loginid": self._loginid}
+        except Exception:
+            self.note_reconnect_failure()
+            raise
 
     async def _send(self, payload: dict, timeout: float = 30.0) -> dict:
         if self._ws is None:
@@ -426,6 +500,31 @@ class DerivWebSocketClient:
         if "error" in resp:
             raise RuntimeError(f"Portfolio fetch failed: {resp['error']}")
         return resp.get("portfolio", {}).get("contracts", [])
+
+    async def get_contract(self, contract_id: int) -> dict:
+        """Fetch open or recently closed contract details (profit / sell_price)."""
+        resp = await self._send(
+            {"proposal_open_contract": 1, "contract_id": int(contract_id)},
+            timeout=30.0,
+        )
+        if "error" in resp:
+            raise RuntimeError(f"Contract fetch failed for {contract_id}: {resp['error']}")
+        return resp.get("proposal_open_contract", {}) or {}
+
+    async def get_profit_table(self, limit: int = 50) -> List[dict]:
+        """Recent closed contracts with buy/sell/profit (for journal reconcile)."""
+        resp = await self._send(
+            {
+                "profit_table": 1,
+                "description": 1,
+                "limit": int(limit),
+                "sort": "DESC",
+            },
+            timeout=45.0,
+        )
+        if "error" in resp:
+            raise RuntimeError(f"Profit table failed: {resp['error']}")
+        return list(resp.get("profit_table", {}).get("transactions", []) or [])
 
     async def sell_contract(self, contract_id: int) -> dict:
         resp = await self._send({"sell": contract_id, "price": 0})

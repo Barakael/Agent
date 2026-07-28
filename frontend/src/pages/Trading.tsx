@@ -4,7 +4,6 @@ import AppShell from '../components/layout/AppShell'
 import EmptyState from '../components/ui/EmptyState'
 import SectionCard from '../components/ui/SectionCard'
 import StatCard from '../components/ui/StatCard'
-import TradeCard from '../components/trading/TradeCard'
 import {
   closeAllPositions,
   closePosition,
@@ -61,6 +60,8 @@ export default function TradingPage() {
   const [preflightRunning, setPreflightRunning] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [journalPage, setJournalPage] = useState(1)
+  const [closingId, setClosingId] = useState<string | null>(null)
 
   const [symbol, setSymbol] = useState(FALLBACK_PAIRS[0])
   const [direction, setDirection] = useState<'buy' | 'sell'>('buy')
@@ -164,6 +165,37 @@ export default function TradingPage() {
   }
 
   const preflightDecision = preflight?.decision ?? 'NO-GO'
+  const numberEngine = status?.number_engine_execution === true
+  const tradingReady = numberEngine || analysisArmed
+  const JOURNAL_PAGE_SIZE = 10
+  const journalTotalPages = Math.max(1, Math.ceil(journal.length / JOURNAL_PAGE_SIZE))
+  const journalPageSafe = Math.min(journalPage, journalTotalPages)
+  const journalPageRows = journal.slice(
+    (journalPageSafe - 1) * JOURNAL_PAGE_SIZE,
+    journalPageSafe * JOURNAL_PAGE_SIZE,
+  )
+  const openContractIds = new Set(
+    positions.map((p) => String(p.contract_id)).filter(Boolean),
+  )
+
+  const handleCloseTrade = async (contractId: string | null | undefined) => {
+    if (!contractId) return
+    const id = Number(contractId)
+    if (!Number.isFinite(id)) {
+      setError(`Cannot close trade — invalid contract id ${contractId}`)
+      return
+    }
+    setClosingId(contractId)
+    try {
+      setError('')
+      await closePosition(id)
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to close trade')
+    } finally {
+      setClosingId(null)
+    }
+  }
 
   return (
     <AppShell title="Trading">
@@ -189,14 +221,20 @@ export default function TradingPage() {
         }
       >
         <p className="mb-3 text-xs text-[color:var(--wayda-muted)]">
-          No orders execute unless preflight passes and per-trade scenario analysis succeeds.
+          {numberEngine
+            ? 'Number Engine mode: opens use strategy confidence (≥88%) and RiskGate — ATAE preflight is advisory only.'
+            : 'No orders execute unless preflight passes and per-trade scenario analysis succeeds.'}
         </p>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard label="Armed" value={analysisArmed ? 'Yes' : 'Blocked'} tone={analysisArmed ? 'success' : 'danger'} />
+          <StatCard
+            label="Armed"
+            value={tradingReady ? (numberEngine ? 'Number Engine' : 'Yes') : 'Blocked'}
+            tone={tradingReady ? 'success' : 'danger'}
+          />
           <StatCard
             label="Preflight"
             value={preflightDecision}
-            tone={preflightDecision === 'GO' ? 'success' : 'danger'}
+            tone={preflightDecision === 'GO' ? 'success' : numberEngine ? 'muted' : 'danger'}
           />
           <StatCard
             label="AI Daily"
@@ -206,10 +244,15 @@ export default function TradingPage() {
           <StatCard label="Mode gate" value={status?.mode ?? '—'} />
         </div>
 
-        {!analysisArmed ? (
+        {!tradingReady ? (
           <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
             Trading blocked — run daily preflight or fix failing checks:{' '}
             {(preflight?.reasons ?? []).slice(0, 4).join('; ') || 'no preflight run yet'}
+          </p>
+        ) : numberEngine && preflightDecision !== 'GO' ? (
+          <p className="mt-3 rounded-lg border border-[color:var(--wayda-border)] bg-[color:var(--wayda-surface)] p-2 text-xs text-[color:var(--wayda-muted)]">
+            Preflight is NO-GO (often Deriv history ping timeouts on synthetics) but Number Engine trading
+            stays active. Live analysis below shows live confidence and skip reasons.
           </p>
         ) : null}
 
@@ -619,18 +662,10 @@ export default function TradingPage() {
 
       <SectionCard title="Trade journal" icon={BookOpen} className="mt-4">
         {journal.length === 0 ? (
-          <EmptyState title="No trades logged" description="Signals and trades are recorded in log_only mode." />
+          <EmptyState title="No trades logged" description="Signals and trades are recorded when the bot opens." />
         ) : (
           <>
-            <div className="space-y-2 md:hidden">
-              {journal.slice(0, 8).map((t) => (
-                <TradeCard key={t.id} trade={t} />
-              ))}
-              {journal.length > 8 ? (
-                <p className="text-xs text-[color:var(--wayda-muted)]">Showing latest 8 of {journal.length}</p>
-              ) : null}
-            </div>
-            <div className="hidden overflow-x-auto md:block">
+            <div className="overflow-x-auto">
               <table className="report-table">
                 <thead>
                   <tr>
@@ -638,44 +673,91 @@ export default function TradingPage() {
                     <th>Dir</th>
                     <th>Strategy</th>
                     <th>Conf %</th>
-                    <th>Regime</th>
                     <th>Stake</th>
-                    <th>SL/TP</th>
+                    <th>Close $</th>
                     <th>P&L</th>
                     <th>Status</th>
+                    <th>Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {journal.map((t) => (
-                    <tr key={t.id}>
-                      <td>{t.symbol}</td>
-                      <td className="uppercase">{t.direction}</td>
-                      <td className="text-xs">{t.signal_source ?? '—'}</td>
-                      <td className="font-mono-metric">
-                        {t.confidence != null ? `${t.confidence}%` : '—'}
-                      </td>
-                      <td className="text-xs">{t.market_condition ?? '—'}</td>
-                      <td className="font-mono-metric">${t.stake}</td>
-                      <td
-                        className="max-w-[10rem] truncate text-xs font-mono-metric"
-                        title={
-                          t.stop_loss_usd != null
-                            ? `Price ${t.stop_loss}/${t.take_profit} · USD $${t.stop_loss_usd}/$${t.take_profit_usd}`
-                            : `Price ${t.stop_loss}/${t.take_profit}`
-                        }
-                      >
-                        {t.stop_loss_usd != null
-                          ? `$${t.stop_loss_usd}/$${t.take_profit_usd}`
-                          : `${t.stop_loss}/${t.take_profit}`}
-                      </td>
-                      <td className="font-mono-metric">{t.pnl ?? '—'}</td>
-                      <td>
-                        <span className="status-pill">{t.status}</span>
-                      </td>
-                    </tr>
-                  ))}
+                  {journalPageRows.map((t) => {
+                    const live =
+                      t.status === 'open' &&
+                      !!t.contract_id &&
+                      openContractIds.has(String(t.contract_id))
+                    const sold =
+                      t.status === 'closed'
+                        ? (t.sold_for ?? t.exit_price)
+                        : null
+                    const pnlTone =
+                      t.pnl != null && t.pnl < 0
+                        ? 'text-red-600 dark:text-red-400'
+                        : t.pnl != null && t.pnl > 0
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : ''
+                    return (
+                      <tr key={t.id}>
+                        <td>{t.symbol}</td>
+                        <td className="uppercase">{t.direction}</td>
+                        <td className="text-xs">{t.signal_source ?? '—'}</td>
+                        <td className="font-mono-metric">
+                          {t.confidence != null ? `${Number(t.confidence).toFixed(0)}%` : '—'}
+                        </td>
+                        <td className="font-mono-metric">${Number(t.stake).toFixed(2)}</td>
+                        <td className="font-mono-metric">
+                          {sold != null ? `$${Number(sold).toFixed(2)}` : '—'}
+                        </td>
+                        <td className={`font-mono-metric ${pnlTone}`}>
+                          {t.pnl != null
+                            ? `${t.pnl > 0 ? '+' : ''}$${Number(t.pnl).toFixed(2)}`
+                            : '—'}
+                        </td>
+                        <td>
+                          <span className="status-pill">{t.status}</span>
+                        </td>
+                        <td>
+                          {live ? (
+                            <button
+                              type="button"
+                              className="btn-secondary text-xs"
+                              disabled={closingId === String(t.contract_id)}
+                              onClick={() => void handleCloseTrade(t.contract_id)}
+                            >
+                              {closingId === String(t.contract_id) ? 'Closing…' : 'Close'}
+                            </button>
+                          ) : (
+                            <span className="text-xs text-[color:var(--wayda-muted)]">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-[color:var(--wayda-muted)]">
+              <span>
+                Page {journalPageSafe} of {journalTotalPages} · {journal.length} trades
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="btn-secondary text-xs"
+                  disabled={journalPageSafe <= 1}
+                  onClick={() => setJournalPage((p) => Math.max(1, p - 1))}
+                >
+                  Previous
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary text-xs"
+                  disabled={journalPageSafe >= journalTotalPages}
+                  onClick={() => setJournalPage((p) => Math.min(journalTotalPages, p + 1))}
+                >
+                  Next
+                </button>
+              </div>
             </div>
           </>
         )}

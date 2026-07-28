@@ -125,19 +125,39 @@ class CandleAggregator:
     def load_historical_candles(self, symbol: str, candles: List[dict]) -> None:
         """Seed buffer from Deriv ticks_history OHLC rows."""
         state = self._state(symbol)
+        state.closed_candles.clear()
+        state.current_bucket = None
+        state.current_candle = None
+        if not candles:
+            return
+        parsed: List[Candle] = []
         for row in candles:
-            c = Candle(
-                symbol=symbol,
-                epoch=int(row["epoch"]),
-                open=float(row["open"]),
-                high=float(row["high"]),
-                low=float(row["low"]),
-                close=float(row["close"]),
-                volume=int(row.get("volume", 0)),
+            parsed.append(
+                Candle(
+                    symbol=symbol,
+                    epoch=int(row["epoch"]),
+                    open=float(row["open"]),
+                    high=float(row["high"]),
+                    low=float(row["low"]),
+                    close=float(row["close"]),
+                    volume=int(row.get("volume", 0)),
+                )
             )
+        # All but last are closed; last is the forming candle so ticks keep updating
+        # and the next bucket boundary fires a real close (not a None no-op).
+        for c in parsed[:-1]:
             state.closed_candles.append(c)
-        if state.closed_candles:
-            state.current_bucket = state.closed_candles[-1].epoch
+        last = parsed[-1]
+        state.current_bucket = last.epoch
+        state.current_candle = Candle(
+            symbol=last.symbol,
+            epoch=last.epoch,
+            open=last.open,
+            high=last.high,
+            low=last.low,
+            close=last.close,
+            volume=last.volume,
+        )
 
     def get_dataframe(self, symbol: str) -> pd.DataFrame:
         state = self._state(symbol)

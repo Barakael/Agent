@@ -367,7 +367,15 @@ class DerivWebSocketClient:
     async def subscribe_ticks(self, symbol: str) -> None:
         resp = await self._send({"ticks": symbol, "subscribe": 1})
         if "error" in resp:
-            raise RuntimeError(f"Tick subscribe failed for {symbol}: {resp['error']}")
+            err = resp["error"]
+            code = err.get("code") if isinstance(err, dict) else None
+            # Already live on this socket — treat as success (watchdog resubscribe race)
+            if code == "AlreadySubscribed" or (
+                isinstance(err, dict) and "AlreadySubscribed" in str(err.get("message", ""))
+            ):
+                logger.info("Ticks already subscribed for %s — keeping feed", symbol)
+                return
+            raise RuntimeError(f"Tick subscribe failed for {symbol}: {err}")
         logger.info("Subscribed to ticks: %s", symbol)
 
     async def unsubscribe_ticks(self, symbol: str) -> None:

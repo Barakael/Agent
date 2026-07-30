@@ -31,11 +31,10 @@ def higher_timeframe_aligned(df: pd.DataFrame, direction: str, factor: int = 3) 
     htf = resample_ohlc(df, factor)
     if len(htf) < 30:
         return True, "htf_insufficient_data_skipped"
-    macd_df = compute_macd(htf["close"])
-    if macd_df.empty:
+    macd_line, _signal_line, _hist = compute_macd(htf["close"])
+    if macd_line is None or len(macd_line) == 0:
         return True, "htf_macd_unavailable"
-    last = macd_df.iloc[-1]
-    macd_val = float(last["macd"])
+    macd_val = float(macd_line.iloc[-1])
     if direction == "buy":
         aligned = macd_val >= 0
     else:

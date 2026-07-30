@@ -1,4 +1,4 @@
-"""Trend Following — HH/HL, EMA alignment, healthy ATR."""
+"""Trend Following — HH/HL, EMA alignment, EMA21 pullback, healthy ATR."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ class TrendFollowingStrategy:
         scores: dict[str, float] = {}
         reasons: list[str] = []
 
-        # Trend strength (25)
+        # Hard structure only (no soft EMA-only path)
         if snapshot.higher_highs and snapshot.higher_lows:
             scores["trend_strength"] = 25
             reasons.append("Higher highs + higher lows")
@@ -38,18 +38,14 @@ class TrendFollowingStrategy:
             scores["trend_strength"] = 25
             reasons.append("Lower highs + lower lows")
             direction = SignalDirection.SELL
-        elif snapshot.trend_direction == "up":
-            scores["trend_strength"] = 12
-            reasons.append("Soft uptrend")
-            direction = SignalDirection.BUY
-        elif snapshot.trend_direction == "down":
-            scores["trend_strength"] = 12
-            reasons.append("Soft downtrend")
-            direction = SignalDirection.SELL
         else:
-            return no_trade(self.strategy_id, ["No clear trend structure"])
+            return no_trade(
+                self.strategy_id,
+                ["No hard HH/HL or LH/LL structure"],
+                scores,
+            )
 
-        # EMA alignment (20)
+        # EMA alignment required
         if direction == SignalDirection.BUY and snapshot.ema_aligned_up:
             scores["ema"] = 20
             reasons.append("EMA aligned bullish")
@@ -59,6 +55,11 @@ class TrendFollowingStrategy:
         else:
             scores["ema"] = 0
             reasons.append("EMA not aligned with structure")
+            return no_trade(
+                self.strategy_id,
+                reasons + ["EMA alignment required"],
+                scores,
+            )
 
         # Momentum / RSI (20)
         if direction == SignalDirection.BUY and 45 <= snapshot.rsi <= 70:
@@ -83,20 +84,40 @@ class TrendFollowingStrategy:
             scores["atr"] = 0
             reasons.append("ATR unhealthy for trend")
 
-        # Support confirmation / pullback (15)
+        # Prefer pullback to EMA21; allow near-EMA (within 0.5 ATR) so we are not silent for days
         mid = snapshot.ema_21
+        atr = float(snapshot.atr or 0.0)
+        near = atr * 0.5 if atr > 0 else 0.0
         if direction == SignalDirection.BUY and snapshot.low <= mid <= snapshot.close:
             scores["support"] = 15
             reasons.append("Pullback to EMA21")
         elif direction == SignalDirection.SELL and snapshot.high >= mid >= snapshot.close:
             scores["support"] = 15
             reasons.append("Rally into EMA21")
-        elif direction == SignalDirection.BUY and snapshot.close > snapshot.ema_21:
-            scores["support"] = 8
-        elif direction == SignalDirection.SELL and snapshot.close < snapshot.ema_21:
-            scores["support"] = 8
+        elif (
+            direction == SignalDirection.BUY
+            and near > 0
+            and snapshot.close >= mid
+            and (snapshot.close - mid) <= near
+        ):
+            scores["support"] = 12
+            reasons.append("Near EMA21 pullback")
+        elif (
+            direction == SignalDirection.SELL
+            and near > 0
+            and snapshot.close <= mid
+            and (mid - snapshot.close) <= near
+        ):
+            scores["support"] = 12
+            reasons.append("Near EMA21 rally")
         else:
             scores["support"] = 0
+            reasons.append("No EMA21 pullback")
+            return no_trade(
+                self.strategy_id,
+                reasons + ["EMA21 pullback required"],
+                scores,
+            )
 
         # Risk reward placeholder (10) — structure distance
         scores["risk_reward"] = 10 if snapshot.atr > 0 else 0
@@ -104,7 +125,7 @@ class TrendFollowingStrategy:
         total = sum(scores.values())
         # Max possible ~110 → normalize to 0–100
         confidence = min(100.0, round(total / 1.1, 1))
-        if scores.get("ema", 0) < 10 or scores.get("trend_strength", 0) < 12:
+        if scores.get("ema", 0) < 20 or scores.get("trend_strength", 0) < 25:
             return no_trade(
                 self.strategy_id,
                 reasons + ["Trend filters failed"],

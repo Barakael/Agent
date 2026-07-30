@@ -71,8 +71,10 @@ class Settings(BaseSettings):
 
     # Strategy Manager
     STRATEGY_CONFIDENCE_THRESHOLD: float = float(
-        os.getenv("STRATEGY_CONFIDENCE_THRESHOLD", "88")
+        os.getenv("STRATEGY_CONFIDENCE_THRESHOLD", "94")
     )
+    # Comma list; empty = all pattern strategies. Example: trend_following
+    STRATEGY_ALLOWLIST: str = os.getenv("STRATEGY_ALLOWLIST", "")
     ATR_SL_MULTIPLIER: float = float(os.getenv("ATR_SL_MULTIPLIER", "1.5"))
     DEFAULT_RR_RATIO: float = float(os.getenv("DEFAULT_RR_RATIO", "2.0"))
 
@@ -86,6 +88,8 @@ class Settings(BaseSettings):
     MAX_DAILY_PROFIT_PERCENT: float = float(os.getenv("MAX_DAILY_PROFIT_PERCENT", "8.0"))
     # 0 = unlimited (demo data collection)
     MAX_TRADES_PER_DAY: int = int(os.getenv("MAX_TRADES_PER_DAY", "0"))
+    # Cap concurrent open contracts (0 = unlimited; any setup that passes rules may open)
+    MAX_OPEN_POSITIONS: int = int(os.getenv("MAX_OPEN_POSITIONS", "0"))
     DEFAULT_SL_PIPS: int = int(os.getenv("DEFAULT_SL_PIPS", "15"))
     DEFAULT_TP_PIPS: int = int(os.getenv("DEFAULT_TP_PIPS", "30"))
     TRAILING_STOP_ENABLED: bool = os.getenv("TRAILING_STOP_ENABLED", "false").lower() == "true"
@@ -123,6 +127,13 @@ class Settings(BaseSettings):
     @property
     def pairs_list(self) -> list[str]:
         return [p.strip() for p in self.TRADING_PAIRS.split(",") if p.strip()]
+
+    @property
+    def strategy_allowlist(self) -> list[str]:
+        """Resolved strategy ids from STRATEGY_ALLOWLIST; empty means no restriction."""
+        raw = [p.strip() for p in self.STRATEGY_ALLOWLIST.split(",") if p.strip()]
+        # Lazy import avoided — aliases applied by callers via resolve_strategy_id
+        return raw
 
     @property
     def granularity_seconds(self) -> int:

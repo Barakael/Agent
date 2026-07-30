@@ -71,6 +71,36 @@ def get_strategy(strategy_id: str):
     return _REGISTRY.get(resolve_strategy_id(strategy_id))
 
 
+def allowlist_strategy_ids() -> list[str]:
+    """Resolved STRATEGY_ALLOWLIST ids; empty list means no restriction."""
+    raw = list(getattr(settings, "strategy_allowlist", None) or [])
+    if not raw:
+        # Fallback if property missing in older settings
+        text = str(getattr(settings, "STRATEGY_ALLOWLIST", "") or "")
+        raw = [p.strip() for p in text.split(",") if p.strip()]
+    if not raw:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for sid in raw:
+        resolved = resolve_strategy_id(sid)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        out.append(resolved)
+    return out
+
+
+def apply_strategy_allowlist(strategy_ids: Iterable[str]) -> list[str]:
+    """Filter requested ids by allowlist when configured."""
+    requested = [resolve_strategy_id(s) for s in strategy_ids]
+    allowed = allowlist_strategy_ids()
+    if not allowed:
+        return requested
+    allowed_set = set(allowed)
+    return [s for s in requested if s in allowed_set]
+
+
 @dataclass
 class ManagerResult:
     signal: Optional[StrategySignal]
@@ -145,7 +175,15 @@ class StrategyManager:
             )
 
         allowed_by_regime = set(REGIME_STRATEGIES.get(regime, ()))
-        requested = [resolve_strategy_id(s) for s in strategy_ids]
+        requested = apply_strategy_allowlist(strategy_ids)
+        allowlist = allowlist_strategy_ids()
+        if allowlist and not requested:
+            return ManagerResult(
+                signal=None,
+                regime=regime,
+                evaluations=[],
+                skip_reason="No strategies in allowlist for this request",
+            )
         # Deduplicate while preserving order
         seen: set[str] = set()
         ordered: list[str] = []
@@ -159,7 +197,9 @@ class StrategyManager:
         for sid in ordered:
             if sid == "bias_swing":
                 continue
-            if sid not in allowed_by_regime:
+            # Focused allowlist: still evaluate those strategies outside the regime map
+            # (strategy quality filters decide). Broad mode keeps regime routing.
+            if sid not in allowed_by_regime and not (allowlist and sid in allowlist):
                 continue
             if armed_ids is not None:
                 # Armed set may contain legacy or new ids
@@ -172,13 +212,20 @@ class StrategyManager:
             candidates.append(strat)
 
         if not candidates:
-            # Fall back: evaluate any requested pattern strategies even if regime map empty
+            # Fall back: evaluate requested pattern strategies even if regime map empty
             for sid in ordered:
                 if sid == "bias_swing":
                     continue
                 strat = _REGISTRY.get(sid)
                 if strat:
                     candidates.append(strat)
+            if not candidates:
+                return ManagerResult(
+                    signal=None,
+                    regime=regime,
+                    evaluations=[],
+                    skip_reason=f"No strategy candidates for regime={regime}",
+                )
 
         evaluations: list[StrategyEvaluation] = []
         for strat in candidates:

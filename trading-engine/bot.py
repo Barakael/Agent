@@ -9,6 +9,7 @@ from typing import Optional
 from alerts.telegram import TelegramAlerter
 from analytics.metrics import compute_metrics
 from analysis.engine import AnalysisEngine
+from analysis.multi_timeframe import higher_timeframe_aligned
 from config import settings
 from data.calendar import EconomicCalendar
 from data.candle_aggregator import CandleAggregator
@@ -22,7 +23,12 @@ from plan.schema import DailyPlan
 from risk.gate import RiskDecision, RiskGate, is_synthetic_symbol
 from risk.session import SessionManager
 from signals.engine import SignalEngine
-from strategies import PATTERN_STRATEGY_IDS, evaluate_strategies_detailed
+from strategies import (
+    PATTERN_STRATEGY_IDS,
+    allowlist_strategy_ids,
+    apply_strategy_allowlist,
+    evaluate_strategies_detailed,
+)
 from strategies.base import StrategyContext
 
 logger = logging.getLogger(__name__)
@@ -231,11 +237,11 @@ class TradingBot:
             directional_bias=plan.directional_bias if plan else "neutral",
             hold_policy=plan.hold_policy if plan else "intraday",
         )
-        strategy_ids = (
-            list(plan.enabled_strategies)
-            if plan
-            else list(PATTERN_STRATEGY_IDS)
-        )
+        if plan:
+            strategy_ids = apply_strategy_allowlist(plan.enabled_strategies)
+        else:
+            allowed = allowlist_strategy_ids()
+            strategy_ids = allowed if allowed else list(PATTERN_STRATEGY_IDS)
         # Number Engine mode: Strategy Manager confidence is the filter, not ATAE armed set
         if settings.NUMBER_ENGINE_EXECUTION:
             armed_filter = None
@@ -275,9 +281,14 @@ class TradingBot:
                 skip_reason=manager_result.skip_reason or "No trade",
                 signal_direction=None,
             )
-            should_log_skip = best_conf >= 40.0 or (
-                manager_result.skip_reason
-                and "confidence" in (manager_result.skip_reason or "").lower()
+            # Always log skips when focused allowlist is on (otherwise silence hides why)
+            should_log_skip = (
+                bool(allowlist_strategy_ids())
+                or best_conf >= 40.0
+                or (
+                    manager_result.skip_reason
+                    and "confidence" in (manager_result.skip_reason or "").lower()
+                )
             )
             if should_log_skip:
                 self.journal.log_no_trade(
@@ -296,6 +307,36 @@ class TradingBot:
                 manager_result.regime,
                 manager_result.skip_reason,
             )
+            return
+
+        # 15m HTF confirmation (Number Engine path)
+        htf_ok, htf_reason = higher_timeframe_aligned(df, signal.direction.value)
+        if not htf_ok:
+            skip = f"htf_not_aligned:{htf_reason}"
+            self._record_analysis(
+                symbol,
+                price=snapshot.close,
+                regime=manager_result.regime,
+                rsi=snapshot.rsi,
+                atr=snapshot.atr,
+                epoch=snapshot.epoch,
+                bars=len(df),
+                best_strategy=getattr(signal, "strategy_id", best_id),
+                confidence=getattr(signal, "confidence", best_conf),
+                skip_reason=skip,
+                signal_direction=signal.direction.value,
+            )
+            self.journal.log_no_trade(
+                symbol=symbol,
+                price=snapshot.close,
+                epoch=snapshot.epoch,
+                regime=manager_result.regime,
+                reason=skip,
+                evaluations=manager_result.evaluations,
+                rsi=snapshot.rsi,
+                macd=snapshot.macd,
+            )
+            logger.info("HTF skip %s: %s", symbol, htf_reason)
             return
 
         self._record_analysis(
@@ -320,6 +361,23 @@ class TradingBot:
                 if psym == symbol:
                     logger.info("Bias skip %s — already open", symbol)
                     return
+
+        # Cap concurrent opens (no stacking)
+        max_open = int(getattr(settings, "MAX_OPEN_POSITIONS", 1) or 0)
+        if max_open > 0:
+            try:
+                await self.positions.refresh()
+            except Exception:
+                logger.debug("Position refresh before max-open check failed", exc_info=True)
+            open_count = len(self.positions.positions or [])
+            if open_count >= max_open:
+                skip = f"max_open_positions ({open_count}>={max_open})"
+                cached = self._last_analysis.get(symbol)
+                if cached:
+                    cached["skip_reason"] = skip
+                self.journal.log_signal_rejected(signal, skip)
+                logger.info("Skip open %s: %s", symbol, skip)
+                return
 
         news_paused, news_reason = self.calendar.is_trading_paused()
         if is_synthetic_symbol(symbol):
@@ -449,6 +507,10 @@ class TradingBot:
             return True
         except Exception as exc:
             msg = str(exc)
+            if "AlreadySubscribed" in msg:
+                self._subscribed_symbols.add(symbol)
+                logger.info("Market feed already live for %s", symbol)
+                return True
             if "MarketIsClosed" in msg:
                 logger.warning("Market closed for %s — will retry", symbol)
             else:
@@ -457,32 +519,52 @@ class TradingBot:
             return False
 
     async def _feed_watchdog(self) -> None:
-        """Retry Deriv tick subscriptions when markets reopen or the socket drops."""
+        """Retry Deriv tick subscriptions when markets reopen or the socket drops.
+
+        Critical: after a WS drop, symbols may still sit in `_subscribed_symbols`.
+        Always reconnect when the socket is dead, clear that set, then resubscribe.
+        """
         while self._running:
-            missing = [s for s in self.active_pairs if s not in self._subscribed_symbols]
             sleep_for = 30.0
-            if missing and settings.DERIV_API_TOKEN:
-                try:
-                    if not self.client._socket_alive():
-                        wait = self.client.seconds_until_reconnect()
-                        if wait > 0:
-                            logger.info("Feed watchdog waiting %.0fs (reconnect backoff)", wait)
-                            sleep_for = min(wait, 30.0)
-                        else:
-                            await self.client.ensure_connected()
-                            self._account_probe_error = None
-                    if self.client._socket_alive():
-                        for symbol in missing:
-                            await self._ensure_symbol_feed(symbol)
-                except Exception as exc:
-                    self._account_probe_error = self._format_deriv_error(exc)
-                    delay = self.client.seconds_until_reconnect() or 30.0
-                    sleep_for = min(max(delay, 30.0), 300.0)
-                    logger.warning(
-                        "Feed watchdog reconnect failed: %s (next try in %.0fs)",
-                        exc,
-                        sleep_for,
-                    )
+            if not settings.DERIV_API_TOKEN:
+                await asyncio.sleep(sleep_for)
+                continue
+            try:
+                if not self.client._socket_alive():
+                    wait = self.client.seconds_until_reconnect()
+                    if wait > 0:
+                        logger.info("Feed watchdog waiting %.0fs (reconnect backoff)", wait)
+                        sleep_for = min(wait, 30.0)
+                    else:
+                        logger.warning(
+                            "Feed watchdog: socket dead — reconnecting and clearing subscriptions"
+                        )
+                        await self.client.ensure_connected()
+                        self._subscribed_symbols.clear()
+                        self._account_probe_error = None
+                if self.client._socket_alive():
+                    missing = [
+                        s for s in self.active_pairs if s not in self._subscribed_symbols
+                    ]
+                    for symbol in missing:
+                        await self._ensure_symbol_feed(symbol)
+                    # Keep status heartbeat fresh while feed is alive
+                    try:
+                        self.journal.update_bot_state(
+                            "running", settings.TRADING_MODE, self.risk.daily_pnl
+                        )
+                    except Exception:
+                        pass
+            except Exception as exc:
+                self._account_probe_error = self._format_deriv_error(exc)
+                self._subscribed_symbols.clear()
+                delay = self.client.seconds_until_reconnect() or 30.0
+                sleep_for = min(max(delay, 30.0), 300.0)
+                logger.warning(
+                    "Feed watchdog reconnect failed: %s (next try in %.0fs)",
+                    exc,
+                    sleep_for,
+                )
             await asyncio.sleep(sleep_for)
 
     async def probe_deriv_account(self) -> None:
@@ -490,11 +572,10 @@ class TradingBot:
             return
         self._account_probed = True
         try:
-            await self.client.connect()
-            await self.client.authorize()
+            await self.client.ensure_connected()
             self._account_probe_error = None
         except Exception as exc:
-            self._account_probe_error = str(exc)
+            self._account_probe_error = self._format_deriv_error(exc)
             logger.warning("Deriv account probe failed: %s", exc)
         finally:
             if not self._running:
@@ -503,9 +584,8 @@ class TradingBot:
     async def run_preflight(self) -> dict:
         pairs = self.active_pairs
         ephemeral = False
-        if self.client._ws is None and settings.DERIV_API_TOKEN:
-            await self.client.connect()
-            await self.client.authorize()
+        if not self.client._socket_alive() and settings.DERIV_API_TOKEN:
+            await self.client.ensure_connected()
             ephemeral = True
         try:
             snapshot = await self.analysis.run_preflight(
@@ -527,8 +607,8 @@ class TradingBot:
         market_data_only = False
         if settings.DERIV_API_TOKEN:
             try:
-                await self.client.connect()
-                auth = await self.client.authorize()
+                # OTP/PAT apps must not open legacy app_id=1089 first (HTTP 401).
+                auth = await self.client.ensure_connected()
                 if self.client.market_data_only:
                     market_data_only = True
                     self._account_probe_error = (
@@ -655,6 +735,10 @@ class TradingBot:
             "state": self.state,
             "mode": settings.TRADING_MODE,
             "pairs": self.active_pairs,
+            "strategy_allowlist": allowlist_strategy_ids(),
+            "max_open_positions": int(getattr(settings, "MAX_OPEN_POSITIONS", 1) or 0),
+            "max_trades_per_day": int(getattr(settings, "MAX_TRADES_PER_DAY", 0) or 0),
+            "feed_connected": self.client._socket_alive(),
             "daily_pnl": self.risk.daily_pnl,
             "kill_switch_active": self.risk.kill_switch_active,
             "balance": self.client.balance,

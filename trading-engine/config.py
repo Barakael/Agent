@@ -59,7 +59,8 @@ class Settings(BaseSettings):
         "R_10,R_25,R_50,R_75,R_100",
     )
     CANDLE_TIMEFRAME_MINUTES: int = int(os.getenv("CANDLE_TIMEFRAME_MINUTES", "5"))
-    CANDLE_BUFFER_SIZE: int = int(os.getenv("CANDLE_BUFFER_SIZE", "200"))
+    # >=288 needed for 24h regime on 5m bars; 320 gives headroom
+    CANDLE_BUFFER_SIZE: int = int(os.getenv("CANDLE_BUFFER_SIZE", "320"))
 
     # Indicators
     RSI_PERIOD: int = int(os.getenv("RSI_PERIOD", "14"))

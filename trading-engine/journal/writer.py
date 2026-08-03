@@ -104,6 +104,13 @@ class JournalWriter:
             stop_loss_usd = stop_loss_usd if stop_loss_usd is not None else computed_sl
             take_profit_usd = take_profit_usd if take_profit_usd is not None else computed_tp
 
+        feature_payload = getattr(signal, "feature_json", None)
+        if feature_payload is None and getattr(signal, "gates", None):
+            feature_payload = {"gates": signal.gates, "pipeline": "bias_v1"}
+        feature_json = (
+            json.dumps(feature_payload, default=str) if feature_payload is not None else None
+        )
+
         with self.Session() as session:
             trade = TradeJournal(
                 symbol=signal.symbol,
@@ -127,6 +134,8 @@ class JournalWriter:
                 confidence=getattr(signal, "confidence", None),
                 market_condition=getattr(signal, "market_condition", None),
                 score_breakdown=json.dumps(getattr(signal, "score_breakdown", None) or {}),
+                feature_json=feature_json,
+                bias_id=getattr(signal, "bias_id", None),
                 sl_tp_method=getattr(risk, "sl_tp_method", None)
                 or getattr(signal, "sl_tp_method", None),
             )
@@ -134,7 +143,7 @@ class JournalWriter:
             session.commit()
             logger.info(
                 "Journal open %s stake=%.2f price_sl=%.5f price_tp=%.5f "
-                "usd_sl=%.2f usd_tp=%.2f method=%s conf=%s",
+                "usd_sl=%.2f usd_tp=%.2f method=%s conf=%s bias_id=%s",
                 signal.symbol,
                 risk.stake,
                 risk.stop_loss_price,
@@ -143,6 +152,7 @@ class JournalWriter:
                 take_profit_usd or 0,
                 trade.sl_tp_method,
                 getattr(signal, "confidence", None),
+                getattr(signal, "bias_id", None),
             )
             return trade.id
 
@@ -212,6 +222,7 @@ class JournalWriter:
                 .first()
             )
             return row.id if row else None
+
 
     def list_open_trades_with_contracts(self, max_age_hours: int = 48) -> list[dict]:
         """Open journal rows that have a Deriv contract_id (for reconcile)."""
@@ -479,6 +490,12 @@ class JournalWriter:
                 breakdown = json.loads(r.score_breakdown)
             except Exception:
                 breakdown = r.score_breakdown
+        feature = None
+        if getattr(r, "feature_json", None):
+            try:
+                feature = json.loads(r.feature_json)
+            except Exception:
+                feature = r.feature_json
         return {
             "id": r.id,
             "symbol": r.symbol,
@@ -500,6 +517,8 @@ class JournalWriter:
             "confidence": getattr(r, "confidence", None),
             "market_condition": getattr(r, "market_condition", None),
             "score_breakdown": breakdown,
+            "feature_json": feature,
+            "bias_id": getattr(r, "bias_id", None),
             "sl_tp_method": getattr(r, "sl_tp_method", None),
             "contract_id": r.contract_id,
             "created_at": r.created_at.isoformat() if r.created_at else None,

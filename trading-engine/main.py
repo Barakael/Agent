@@ -143,6 +143,25 @@ async def analysis_snapshots(auth: bool = Depends(validate_api_key)):
     return {"data": bot.get_analysis_snapshots()}
 
 
+@app.get("/analysis/horizon-reviews")
+async def horizon_reviews(auth: bool = Depends(validate_api_key)):
+    """Independent mid (4/6h) and 8h trade-stance reviews (advisory only)."""
+    if bot is None:
+        return {"data": []}
+    return {"data": bot.get_horizon_reviews()}
+
+
+@app.get("/analysis/bias-feature-report")
+async def bias_feature_report(
+    min_n: int = 1,
+    auth: bool = Depends(validate_api_key),
+):
+    """Phase 3: empirical WR by regime/bias/confirm (no auto-weight)."""
+    from scripts.bias_feature_report import build_report
+
+    return {"data": build_report(min_n=max(1, min_n))}
+
+
 @app.get("/analysis/market-brief")
 async def market_brief(auth: bool = Depends(validate_api_key)):
     """Live multi-source brief for Cursor Automations (prices, calendar, headlines, fitness)."""

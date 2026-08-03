@@ -9,7 +9,24 @@ from typing import Optional
 from alerts.telegram import TelegramAlerter
 from analytics.metrics import compute_metrics
 from analysis.engine import AnalysisEngine
+from analysis.horizon_review import (
+    HorizonReview,
+    compute_8h_review,
+    compute_mid_review,
+    is_horizon_bar_close,
+)
 from analysis.multi_timeframe import higher_timeframe_aligned
+from bias import (
+    FeatureStore,
+    bias_sl_tp,
+    build_feature_dict,
+    compute_bias_6h,
+    compute_regime_24h,
+    confirm_1h_entry,
+)
+from bias.bias_6h import BiasState
+from bias.confirm_1h import is_entry_bar_close
+from bias.regime_24h import RegimeState
 from config import settings
 from data.calendar import EconomicCalendar
 from data.candle_aggregator import CandleAggregator
@@ -22,14 +39,14 @@ from plan.store import plan_store
 from plan.schema import DailyPlan
 from risk.gate import RiskDecision, RiskGate, is_synthetic_symbol
 from risk.session import SessionManager
-from signals.engine import SignalEngine
+from signals.engine import SignalDirection, SignalEngine
 from strategies import (
     PATTERN_STRATEGY_IDS,
     allowlist_strategy_ids,
     apply_strategy_allowlist,
     evaluate_strategies_detailed,
 )
-from strategies.base import StrategyContext
+from strategies.base import StrategyContext, make_signal
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +73,7 @@ class TradingBot:
             close_gate=self._close_gate,
         )
         self.telegram = TelegramAlerter()
+        self.feature_store = FeatureStore(self.journal.Session)
         self._running = False
         self._paused = False
         self._task: Optional[asyncio.Task] = None
@@ -65,6 +83,11 @@ class TradingBot:
         self._last_tick_epoch: dict[str, int] = {}
         self._account_probed = False
         self._account_probe_error: Optional[str] = None
+        self._bias_state: dict[str, BiasState] = {}
+        self._regime_state: dict[str, RegimeState] = {}
+        self._traded_bias_ids: dict[str, str] = {}
+        self._mid_review: dict[str, HorizonReview] = {}
+        self._8h_review: dict[str, HorizonReview] = {}
         self.plan_store = plan_store
 
     def get_active_plan(self) -> Optional[DailyPlan]:
@@ -144,15 +167,20 @@ class TradingBot:
         epoch: int,
         bars: int,
         best_strategy: str | None,
-        confidence: float,
+        confidence: float | None,
         skip_reason: str | None,
         signal_direction: str | None,
+        bias: str | None = None,
+        bias_id: str | None = None,
+        gates: dict | None = None,
+        pipeline: str | None = None,
+        empirical: float | None = None,
     ) -> None:
         import time as _time
 
         now = int(_time.time())
         last_tick = self._last_tick_epoch.get(symbol, 0)
-        self._last_analysis[symbol] = {
+        entry: dict = {
             "symbol": symbol,
             "price": price,
             "regime": regime,
@@ -161,20 +189,145 @@ class TradingBot:
             "epoch": epoch,
             "bars": bars,
             "best_strategy": best_strategy,
-            "confidence": round(confidence, 1),
+            "confidence": round(confidence, 1) if confidence is not None else None,
             "skip_reason": skip_reason,
             "signal": signal_direction,
             "feed_ok": symbol in self._subscribed_symbols,
             "last_tick_age_sec": (now - last_tick) if last_tick else None,
             "updated_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
         }
+        if pipeline:
+            entry["pipeline"] = pipeline
+            entry["bias"] = bias
+            entry["bias_id"] = bias_id
+            entry["gates"] = gates or {"passed": [], "failed": []}
+            entry["empirical"] = empirical
+            # No fake checklist % on bias path
+            entry["confidence"] = None
+        mid = self._mid_review.get(symbol)
+        long8 = self._8h_review.get(symbol)
+        if mid is not None:
+            entry["review_mid"] = mid.to_dict()
+        if long8 is not None:
+            entry["review_8h"] = long8.to_dict()
+        self._last_analysis[symbol] = entry
+
+    def get_horizon_reviews(self) -> list[dict]:
+        """Latest mid (4/6h) and 8h advisory reviews per active pair."""
+        out: list[dict] = []
+        for symbol in self.active_pairs:
+            mid = self._mid_review.get(symbol)
+            long8 = self._8h_review.get(symbol)
+            out.append(
+                {
+                    "symbol": symbol,
+                    "review_mid": mid.to_dict() if mid else None,
+                    "review_8h": long8.to_dict() if long8 else None,
+                    "mid_hours": settings.REVIEW_MID_HOURS,
+                    "long_hours": settings.REVIEW_8H_HOURS,
+                    "enabled": settings.uses_horizon_review(symbol),
+                }
+            )
+        return out
+
+    def _maybe_refresh_horizon_reviews(self, symbol: str, df) -> None:
+        """Refresh mid and 8h reviews on their own bar-close cadences (independent)."""
+        if not settings.uses_horizon_review(symbol):
+            return
+        if df is None or len(df) == 0 or "epoch" not in df.columns:
+            return
+
+        epoch = int(df["epoch"].iloc[-1])
+        bar_minutes = settings.CANDLE_TIMEFRAME_MINUTES
+        mid_h = int(settings.REVIEW_MID_HOURS)
+        long_h = int(settings.REVIEW_8H_HOURS)
+
+        # Seed once so UI has something before the first period close
+        if symbol not in self._mid_review:
+            mid = compute_mid_review(symbol, df, bar_minutes=bar_minutes, hours=mid_h)
+            self._mid_review[symbol] = mid
+            self._log_horizon_review(mid, event="review_mid_seed")
+        if symbol not in self._8h_review:
+            long_rev = compute_8h_review(symbol, df, bar_minutes=bar_minutes, hours=long_h)
+            self._8h_review[symbol] = long_rev
+            self._log_horizon_review(long_rev, event="review_8h_seed")
+
+        if is_horizon_bar_close(epoch, mid_h):
+            mid = compute_mid_review(symbol, df, bar_minutes=bar_minutes, hours=mid_h)
+            prev = self._mid_review.get(symbol)
+            self._mid_review[symbol] = mid
+            if prev is None or prev.review_id != mid.review_id or prev.stance != mid.stance:
+                self._log_horizon_review(mid, event="review_mid")
+                logger.info(
+                    "Mid %sh review %s stance=%s id=%s",
+                    mid_h,
+                    symbol,
+                    mid.stance,
+                    mid.review_id,
+                )
+
+        if is_horizon_bar_close(epoch, long_h):
+            long_rev = compute_8h_review(symbol, df, bar_minutes=bar_minutes, hours=long_h)
+            prev = self._8h_review.get(symbol)
+            self._8h_review[symbol] = long_rev
+            if (
+                prev is None
+                or prev.review_id != long_rev.review_id
+                or prev.stance != long_rev.stance
+            ):
+                self._log_horizon_review(long_rev, event="review_8h")
+                logger.info(
+                    "8h review %s stance=%s id=%s",
+                    symbol,
+                    long_rev.stance,
+                    long_rev.review_id,
+                )
+
+        cached = self._last_analysis.get(symbol)
+        if cached is not None:
+            if symbol in self._mid_review:
+                cached["review_mid"] = self._mid_review[symbol].to_dict()
+            if symbol in self._8h_review:
+                cached["review_8h"] = self._8h_review[symbol].to_dict()
+
+    def _log_horizon_review(self, review: HorizonReview, *, event: str) -> None:
+        try:
+            self.feature_store.log(
+                symbol=review.symbol,
+                event=event,
+                features=review.to_dict(),
+                bias_id=review.review_id,
+                regime=f"{review.hours}h",
+                bias=review.stance,
+            )
+            self.journal.log_analysis_run(
+                type(
+                    "Snap",
+                    (),
+                    {
+                        "run_type": event,
+                        "symbol": review.symbol,
+                        "passed": review.stance != "STAND_ASIDE",
+                        "decision": "GO" if review.stance != "STAND_ASIDE" else "NO-GO",
+                        "reasons": review.reasons,
+                        "sources": review.to_dict(),
+                    },
+                )()
+            )
+        except Exception:
+            logger.debug("Horizon review log failed", exc_info=True)
 
     def get_analysis_snapshots(self) -> list[dict]:
-        """Last Number Engine evaluation per active pair (for live UI)."""
+        """Last Number Engine / bias evaluation per active pair (for live UI)."""
         out: list[dict] = []
         for symbol in self.active_pairs:
             if symbol in self._last_analysis:
-                out.append(self._last_analysis[symbol])
+                row = dict(self._last_analysis[symbol])
+                if symbol in self._mid_review:
+                    row["review_mid"] = self._mid_review[symbol].to_dict()
+                if symbol in self._8h_review:
+                    row["review_8h"] = self._8h_review[symbol].to_dict()
+                out.append(row)
             else:
                 df = self.aggregator.get_dataframe(symbol)
                 bars = len(df)
@@ -182,24 +335,32 @@ class TradingBot:
                 import time as _time
 
                 now = int(_time.time())
-                out.append(
-                    {
-                        "symbol": symbol,
-                        "price": float(df["close"].iloc[-1]) if bars else None,
-                        "regime": None,
-                        "rsi": None,
-                        "atr": None,
-                        "epoch": int(df["epoch"].iloc[-1]) if bars and "epoch" in df.columns else None,
-                        "bars": bars,
-                        "best_strategy": None,
-                        "confidence": 0.0,
-                        "skip_reason": "waiting_for_candle_close" if bars else "warming_up",
-                        "signal": None,
-                        "feed_ok": symbol in self._subscribed_symbols,
-                        "last_tick_age_sec": (now - last_tick) if last_tick else None,
-                        "updated_at": None,
-                    }
-                )
+                row = {
+                    "symbol": symbol,
+                    "price": float(df["close"].iloc[-1]) if bars else None,
+                    "regime": None,
+                    "rsi": None,
+                    "atr": None,
+                    "epoch": int(df["epoch"].iloc[-1]) if bars and "epoch" in df.columns else None,
+                    "bars": bars,
+                    "best_strategy": None,
+                    "confidence": 0.0 if not settings.uses_bias_pipeline(symbol) else None,
+                    "skip_reason": "waiting_for_candle_close" if bars else "warming_up",
+                    "signal": None,
+                    "feed_ok": symbol in self._subscribed_symbols,
+                    "last_tick_age_sec": (now - last_tick) if last_tick else None,
+                    "updated_at": None,
+                }
+                if settings.uses_bias_pipeline(symbol):
+                    row["pipeline"] = "bias_v1"
+                    row["bias"] = None
+                    row["gates"] = {"passed": [], "failed": []}
+                    row["empirical"] = None
+                if symbol in self._mid_review:
+                    row["review_mid"] = self._mid_review[symbol].to_dict()
+                if symbol in self._8h_review:
+                    row["review_8h"] = self._8h_review[symbol].to_dict()
+                out.append(row)
         return out
 
     async def _on_candle_close(self, symbol: str) -> None:
@@ -215,6 +376,14 @@ class TradingBot:
             await self._close_all_positions(force=True, skip_swing=True)
 
         df = self.aggregator.get_dataframe(symbol)
+
+        # Independent horizon reviews (mid 4/6h + 8h) — never block bias/entry path
+        self._maybe_refresh_horizon_reviews(symbol, df)
+
+        if settings.uses_bias_pipeline(symbol):
+            await self._on_bias_pipeline_candle(symbol, df, plan)
+            return
+
         snapshot = self.number_engine.compute(symbol, df)
         if snapshot is None:
             self._record_analysis(
@@ -362,6 +531,318 @@ class TradingBot:
                     logger.info("Bias skip %s — already open", symbol)
                     return
 
+        await self._risk_and_execute(symbol, signal, df, plan)
+
+    async def _on_bias_pipeline_candle(self, symbol: str, df, plan) -> None:
+        """R_50 path: 24h regime + 6h bias every 5m; entry only on 1h close."""
+        bar_minutes = settings.CANDLE_TIMEFRAME_MINUTES
+        epoch = int(df["epoch"].iloc[-1]) if len(df) and "epoch" in df.columns else 0
+        price = float(df["close"].iloc[-1]) if len(df) else 0.0
+
+        if len(df) < 60:
+            self._record_analysis(
+                symbol,
+                price=price,
+                regime="unknown",
+                rsi=0.0,
+                atr=0.0,
+                epoch=epoch,
+                bars=len(df),
+                best_strategy="bias_pipeline",
+                confidence=None,
+                skip_reason="insufficient_bars",
+                signal_direction=None,
+                pipeline="bias_v1",
+                gates={"passed": [], "failed": ["insufficient_bars"]},
+            )
+            return
+
+        regime = compute_regime_24h(
+            df,
+            bar_minutes=bar_minutes,
+            hours=settings.BIAS_REGIME_HOURS,
+        )
+        prev = self._bias_state.get(symbol)
+        bias = compute_bias_6h(
+            df,
+            regime,
+            bar_minutes=bar_minutes,
+            hours=settings.BIAS_LOOKBACK_HOURS,
+            deadzone_atr_frac=settings.BIAS_DEADZONE_ATR_FRAC,
+            prev_bias=prev,
+        )
+        self._regime_state[symbol] = regime
+        if prev is None or prev.bias_id != bias.bias_id or prev.direction != bias.direction:
+            feats = build_feature_dict(symbol=symbol, regime=regime, bias=bias)
+            self.feature_store.log(
+                symbol=symbol,
+                event="bias_change",
+                features=feats,
+                bias_id=bias.bias_id,
+                regime=regime.label,
+                bias=bias.direction,
+            )
+        self._bias_state[symbol] = bias
+
+        gates = {"passed": [f"regime:{regime.label}", f"bias:{bias.direction}"], "failed": []}
+        entry_tf = settings.BIAS_ENTRY_TF_MINUTES
+        on_entry_bar = is_entry_bar_close(epoch, entry_tf)
+
+        if not on_entry_bar:
+            self._record_analysis(
+                symbol,
+                price=price,
+                regime=regime.label,
+                rsi=bias.rsi,
+                atr=bias.atr_6h,
+                epoch=epoch,
+                bars=len(df),
+                best_strategy="bias_pipeline",
+                confidence=None,
+                skip_reason="awaiting_1h_close",
+                signal_direction=None,
+                bias=bias.direction,
+                bias_id=bias.bias_id,
+                gates=gates,
+                pipeline="bias_v1",
+            )
+            return
+
+        # 1h evaluation
+        confirm = confirm_1h_entry(
+            df,
+            bias,
+            regime,
+            bar_minutes=bar_minutes,
+            entry_tf_minutes=entry_tf,
+        )
+        feats = build_feature_dict(
+            symbol=symbol, regime=regime, bias=bias, confirm=confirm
+        )
+        self.feature_store.log(
+            symbol=symbol,
+            event="evaluate",
+            features=feats,
+            bias_id=bias.bias_id,
+            regime=regime.label,
+            bias=bias.direction,
+        )
+        gates = {
+            "passed": list(confirm.gates_passed),
+            "failed": list(confirm.gates_failed),
+        }
+
+        if bias.direction == "NO_TRADE":
+            skip = "bias_no_trade"
+            gates["failed"] = list(dict.fromkeys(gates["failed"] + ["bias_no_trade"]))
+            self._record_analysis(
+                symbol,
+                price=price,
+                regime=regime.label,
+                rsi=bias.rsi,
+                atr=bias.atr_6h,
+                epoch=epoch,
+                bars=len(df),
+                best_strategy="bias_pipeline",
+                confidence=None,
+                skip_reason=skip,
+                signal_direction=None,
+                bias=bias.direction,
+                bias_id=bias.bias_id,
+                gates=gates,
+                pipeline="bias_v1",
+            )
+            self.feature_store.log(
+                symbol=symbol,
+                event="skip",
+                features={**feats, "skip": skip},
+                bias_id=bias.bias_id,
+                regime=regime.label,
+                bias=bias.direction,
+            )
+            return
+
+        # Thesis lock: open position or same bias_id already traded
+        thesis_open = False
+        try:
+            await self.positions.refresh()
+        except Exception:
+            logger.debug("Position refresh before thesis check failed", exc_info=True)
+        for pos in self.positions.positions or []:
+            psym = pos.get("underlying") or pos.get("symbol") or ""
+            if psym == symbol:
+                thesis_open = True
+                break
+        if not thesis_open and self.journal.has_open_thesis(symbol):
+            thesis_open = True
+        if thesis_open and settings.BIAS_MAX_OPEN_THESIS >= 1:
+            skip = "thesis_already_open"
+            gates["failed"] = list(dict.fromkeys(gates["failed"] + [skip]))
+            self._record_analysis(
+                symbol,
+                price=price,
+                regime=regime.label,
+                rsi=bias.rsi,
+                atr=bias.atr_6h,
+                epoch=epoch,
+                bars=len(df),
+                best_strategy="bias_pipeline",
+                confidence=None,
+                skip_reason=skip,
+                signal_direction=None,
+                bias=bias.direction,
+                bias_id=bias.bias_id,
+                gates=gates,
+                pipeline="bias_v1",
+            )
+            self.feature_store.log(
+                symbol=symbol,
+                event="skip",
+                features={**feats, "skip": skip},
+                bias_id=bias.bias_id,
+                regime=regime.label,
+                bias=bias.direction,
+            )
+            return
+
+        last_bias = self._traded_bias_ids.get(symbol) or self.journal.last_closed_bias_id(symbol)
+        if last_bias and last_bias == bias.bias_id:
+            skip = "same_bias_thesis"
+            gates["failed"] = list(dict.fromkeys(gates["failed"] + [skip]))
+            self._record_analysis(
+                symbol,
+                price=price,
+                regime=regime.label,
+                rsi=bias.rsi,
+                atr=bias.atr_6h,
+                epoch=epoch,
+                bars=len(df),
+                best_strategy="bias_pipeline",
+                confidence=None,
+                skip_reason=skip,
+                signal_direction=None,
+                bias=bias.direction,
+                bias_id=bias.bias_id,
+                gates=gates,
+                pipeline="bias_v1",
+            )
+            self.feature_store.log(
+                symbol=symbol,
+                event="skip",
+                features={**feats, "skip": skip},
+                bias_id=bias.bias_id,
+                regime=regime.label,
+                bias=bias.direction,
+            )
+            return
+
+        if not confirm.ok:
+            skip = "confirm_failed:" + (",".join(confirm.gates_failed) or "none")
+            self._record_analysis(
+                symbol,
+                price=price,
+                regime=regime.label,
+                rsi=confirm.rsi or bias.rsi,
+                atr=bias.atr_6h,
+                epoch=epoch,
+                bars=len(df),
+                best_strategy="bias_pipeline",
+                confidence=None,
+                skip_reason=skip,
+                signal_direction=confirm.direction if confirm.direction != "none" else None,
+                bias=bias.direction,
+                bias_id=bias.bias_id,
+                gates=gates,
+                pipeline="bias_v1",
+            )
+            self.feature_store.log(
+                symbol=symbol,
+                event="skip",
+                features={**feats, "skip": skip},
+                bias_id=bias.bias_id,
+                regime=regime.label,
+                bias=bias.direction,
+            )
+            self.journal.log_no_trade(
+                symbol=symbol,
+                price=price,
+                epoch=epoch,
+                regime=regime.label,
+                reason=skip,
+                rsi=confirm.rsi or bias.rsi,
+                macd=0.0,
+            )
+            return
+
+        direction = (
+            SignalDirection.BUY if confirm.direction == "buy" else SignalDirection.SELL
+        )
+        entry = confirm.entry_price or price
+        sl, tp, method = bias_sl_tp(bias, entry, direction)
+        gates_payload = {
+            "passed": confirm.gates_passed,
+            "failed": confirm.gates_failed,
+            "confirm_type": confirm.confirm_type,
+        }
+        signal = make_signal(
+            strategy_id="bias_pipeline",
+            symbol=symbol,
+            direction=direction,
+            price=entry,
+            epoch=epoch,
+            reason=f"bias_v1 {bias.direction} {confirm.confirm_type}; " + "; ".join(confirm.reasons),
+            rsi=confirm.rsi or bias.rsi,
+            macd=0.0,
+            trade_mode="bias",
+            hold_policy="swing",
+            confidence=0.0,
+            market_condition=regime.label,
+            score_breakdown={
+                "gates_passed": confirm.gates_passed,
+                "gates_failed": confirm.gates_failed,
+                "confirm_type": confirm.confirm_type,
+                "pipeline": "bias_v1",
+            },
+            suggested_sl=sl,
+            suggested_tp=tp,
+            sl_tp_method=method,
+            bias_id=bias.bias_id,
+            feature_json=feats,
+            gates=gates_payload,
+        )
+
+        self._record_analysis(
+            symbol,
+            price=entry,
+            regime=regime.label,
+            rsi=signal.rsi,
+            atr=bias.atr_6h,
+            epoch=epoch,
+            bars=len(df),
+            best_strategy="bias_pipeline",
+            confidence=None,
+            skip_reason=None,
+            signal_direction=signal.direction.value,
+            bias=bias.direction,
+            bias_id=bias.bias_id,
+            gates=gates_payload,
+            pipeline="bias_v1",
+        )
+
+        opened = await self._risk_and_execute(symbol, signal, df, plan)
+        if opened:
+            self._traded_bias_ids[symbol] = bias.bias_id
+            self.feature_store.log(
+                symbol=symbol,
+                event="fill",
+                features=feats,
+                bias_id=bias.bias_id,
+                regime=regime.label,
+                bias=bias.direction,
+            )
+
+    async def _risk_and_execute(self, symbol: str, signal, df, plan) -> bool:
+        """Shared RiskGate → execute path. Returns True if a trade was opened."""
         # Cap concurrent opens (no stacking)
         max_open = int(getattr(settings, "MAX_OPEN_POSITIONS", 1) or 0)
         if max_open > 0:
@@ -377,7 +858,7 @@ class TradingBot:
                     cached["skip_reason"] = skip
                 self.journal.log_signal_rejected(signal, skip)
                 logger.info("Skip open %s: %s", symbol, skip)
-                return
+                return False
 
         news_paused, news_reason = self.calendar.is_trading_paused()
         if is_synthetic_symbol(symbol):
@@ -407,22 +888,22 @@ class TradingBot:
             if cached:
                 cached["skip_reason"] = risk_result.reason
                 cached["signal"] = signal.direction.value
-            return
+            return False
 
         if not settings.NUMBER_ENGINE_EXECUTION:
             open_snapshot = self.analysis.evaluate_open(signal, df, risk_result)
             if not open_snapshot.passed:
                 self.journal.log_signal_rejected(signal, "; ".join(open_snapshot.reasons))
                 logger.info("Analysis rejected open %s: %s", symbol, open_snapshot.reasons)
-                return
+                return False
 
         if settings.TRADING_MODE == "log_only":
             logger.info(
-                "SIGNAL %s %s @ %.5f conf=%.0f RSI=%.1f — %s [number_engine]",
+                "SIGNAL %s %s @ %.5f gates=%s RSI=%.1f — %s [bias_or_ne]",
                 signal.direction.value,
                 symbol,
                 signal.price,
-                getattr(signal, "confidence", 0),
+                getattr(signal, "gates", None) or getattr(signal, "confidence", 0),
                 signal.rsi,
                 signal.reason,
             )
@@ -431,11 +912,11 @@ class TradingBot:
             await self.telegram.trade_opened(
                 symbol, signal.direction.value, risk_result.stake, "log_only"
             )
-            return
+            return True
 
         hold = getattr(signal, "hold_policy", "intraday")
         if hold != "swing" and not self.session.is_session_open():
-            return
+            return False
 
         if (
             not settings.NUMBER_ENGINE_EXECUTION
@@ -443,7 +924,7 @@ class TradingBot:
             and not self.analysis_armed
         ):
             self.journal.log_signal_rejected(signal, "preflight_not_armed")
-            return
+            return False
 
         try:
             order = await self.executor.execute_signal(signal, risk_result)
@@ -455,7 +936,7 @@ class TradingBot:
             if cached:
                 cached["skip_reason"] = msg[:200]
                 cached["signal"] = signal.direction.value
-            return
+            return False
 
         contract_id = str(order.get("contract_id", "")) if order else None
         self.journal.log_trade_open(
@@ -472,6 +953,7 @@ class TradingBot:
         await self.telegram.trade_opened(
             symbol, signal.direction.value, risk_result.stake, settings.TRADING_MODE
         )
+        return True
 
     async def _close_all_positions(self, force: bool = False, skip_swing: bool = False) -> None:
         dfs = {s: self.aggregator.get_dataframe(s) for s in settings.pairs_list}

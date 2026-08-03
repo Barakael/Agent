@@ -72,6 +72,14 @@ class Settings(BaseSettings):
     BIAS_MAX_OPEN_THESIS: int = int(os.getenv("BIAS_MAX_OPEN_THESIS", "1"))
     BIAS_SL_ATR_MULT: float = float(os.getenv("BIAS_SL_ATR_MULT", "1.0"))
 
+    # Independent horizon reviews (advisory; do not place orders)
+    # Mid review: 4 or 6h cadence; 8h review: separate longer-horizon stance
+    REVIEW_HORIZON_ENABLED: bool = (
+        os.getenv("REVIEW_HORIZON_ENABLED", "true").lower() == "true"
+    )
+    REVIEW_MID_HOURS: int = int(os.getenv("REVIEW_MID_HOURS", "6"))  # 4 or 6
+    REVIEW_8H_HOURS: int = int(os.getenv("REVIEW_8H_HOURS", "8"))
+    REVIEW_HORIZON_SYMBOLS: str = os.getenv("REVIEW_HORIZON_SYMBOLS", "")  # empty = active pairs
 
     # Indicators
     RSI_PERIOD: int = int(os.getenv("RSI_PERIOD", "14"))
@@ -154,6 +162,18 @@ class Settings(BaseSettings):
     def uses_bias_pipeline(self, symbol: str) -> bool:
         return bool(self.BIAS_PIPELINE) and symbol in self.bias_pipeline_symbols
 
+    @property
+    def review_horizon_symbols(self) -> list[str]:
+        raw = [p.strip() for p in self.REVIEW_HORIZON_SYMBOLS.split(",") if p.strip()]
+        return raw
+
+    def uses_horizon_review(self, symbol: str) -> bool:
+        if not self.REVIEW_HORIZON_ENABLED:
+            return False
+        scoped = self.review_horizon_symbols
+        if not scoped:
+            return True
+        return symbol in scoped
 
     @property
     def granularity_seconds(self) -> int:

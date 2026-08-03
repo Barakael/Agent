@@ -62,6 +62,17 @@ class Settings(BaseSettings):
     # >=288 needed for 24h regime on 5m bars; 320 gives headroom
     CANDLE_BUFFER_SIZE: int = int(os.getenv("CANDLE_BUFFER_SIZE", "320"))
 
+    # Bias pipeline (R_50): 24h regime → 6h bias → 1h confirm; 5m is feed only
+    BIAS_PIPELINE: bool = os.getenv("BIAS_PIPELINE", "true").lower() == "true"
+    BIAS_PIPELINE_SYMBOLS: str = os.getenv("BIAS_PIPELINE_SYMBOLS", "R_50")
+    BIAS_REGIME_HOURS: int = int(os.getenv("BIAS_REGIME_HOURS", "24"))
+    BIAS_LOOKBACK_HOURS: int = int(os.getenv("BIAS_LOOKBACK_HOURS", "6"))
+    BIAS_ENTRY_TF_MINUTES: int = int(os.getenv("BIAS_ENTRY_TF_MINUTES", "60"))
+    BIAS_DEADZONE_ATR_FRAC: float = float(os.getenv("BIAS_DEADZONE_ATR_FRAC", "0.3"))
+    BIAS_MAX_OPEN_THESIS: int = int(os.getenv("BIAS_MAX_OPEN_THESIS", "1"))
+    BIAS_SL_ATR_MULT: float = float(os.getenv("BIAS_SL_ATR_MULT", "1.0"))
+
+
     # Indicators
     RSI_PERIOD: int = int(os.getenv("RSI_PERIOD", "14"))
     RSI_OVERSOLD: float = float(os.getenv("RSI_OVERSOLD", "30"))
@@ -135,6 +146,14 @@ class Settings(BaseSettings):
         raw = [p.strip() for p in self.STRATEGY_ALLOWLIST.split(",") if p.strip()]
         # Lazy import avoided — aliases applied by callers via resolve_strategy_id
         return raw
+
+    @property
+    def bias_pipeline_symbols(self) -> list[str]:
+        return [p.strip() for p in self.BIAS_PIPELINE_SYMBOLS.split(",") if p.strip()]
+
+    def uses_bias_pipeline(self, symbol: str) -> bool:
+        return bool(self.BIAS_PIPELINE) and symbol in self.bias_pipeline_symbols
+
 
     @property
     def granularity_seconds(self) -> int:

@@ -39,6 +39,8 @@ class TradeJournal(Base):
     confidence = Column(Float, nullable=True)
     market_condition = Column(String(32), nullable=True)
     score_breakdown = Column(Text, nullable=True)  # JSON
+    feature_json = Column(Text, nullable=True)  # bias pipeline features
+    bias_id = Column(String(32), nullable=True)
     sl_tp_method = Column(String(32), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     closed_at = Column(DateTime, nullable=True)
@@ -100,6 +102,22 @@ class AnalysisRun(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class MarketFeatureLog(Base):
+    """Evidence log for bias pipeline (regime/bias/confirm/skip/fill)."""
+
+    __tablename__ = "market_feature_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String(32), nullable=False)
+    event = Column(String(32), nullable=False)  # bias_change, evaluate, skip, fill, close
+    bias_id = Column(String(32), nullable=True)
+    regime = Column(String(32), nullable=True)
+    bias = Column(String(16), nullable=True)
+    trade_id = Column(Integer, nullable=True)
+    features_json = Column(Text, nullable=False, default="{}")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 def get_engine():
     return create_engine(settings.DATABASE_URL, echo=settings.DEBUG)
 
@@ -120,6 +138,8 @@ def _ensure_columns(engine) -> None:
         ("trade_journal", "sl_tp_method", "VARCHAR(32)"),
         ("trade_journal", "stop_loss_usd", "FLOAT"),
         ("trade_journal", "take_profit_usd", "FLOAT"),
+        ("trade_journal", "feature_json", "TEXT"),
+        ("trade_journal", "bias_id", "VARCHAR(32)"),
         ("signal_logs", "strategy_id", "VARCHAR(64)"),
         ("signal_logs", "confidence", "FLOAT"),
         ("signal_logs", "market_condition", "VARCHAR(32)"),

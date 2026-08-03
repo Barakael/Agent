@@ -30,6 +30,9 @@ class StrategySignal(TradeSignal):
     suggested_sl: Optional[float] = None
     suggested_tp: Optional[float] = None
     sl_tp_method: str = "atr"
+    bias_id: Optional[str] = None
+    feature_json: Optional[dict] = None
+    gates: Optional[dict] = None
 
     def to_dict(self) -> dict:
         base = super().to_dict()
@@ -44,6 +47,9 @@ class StrategySignal(TradeSignal):
                 "suggested_sl": self.suggested_sl,
                 "suggested_tp": self.suggested_tp,
                 "sl_tp_method": self.sl_tp_method,
+                "bias_id": self.bias_id,
+                "feature_json": self.feature_json,
+                "gates": self.gates,
             }
         )
         return base
@@ -139,6 +145,9 @@ def make_signal(
     suggested_sl: float | None = None,
     suggested_tp: float | None = None,
     sl_tp_method: str = "atr",
+    bias_id: str | None = None,
+    feature_json: dict | None = None,
+    gates: dict | None = None,
 ) -> StrategySignal:
     return StrategySignal(
         symbol=symbol,
@@ -158,6 +167,9 @@ def make_signal(
         suggested_sl=suggested_sl,
         suggested_tp=suggested_tp,
         sl_tp_method=sl_tp_method,
+        bias_id=bias_id,
+        feature_json=feature_json,
+        gates=gates,
     )
 
 

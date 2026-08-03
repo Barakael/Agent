@@ -223,6 +223,29 @@ class JournalWriter:
             )
             return row.id if row else None
 
+    def has_open_thesis(self, symbol: str) -> bool:
+        """True if journal has an open trade for symbol (one-thesis anti-stack)."""
+        with self.Session() as session:
+            row = (
+                session.query(TradeJournal.id)
+                .filter(TradeJournal.symbol == symbol, TradeJournal.status == "open")
+                .first()
+            )
+            return row is not None
+
+    def last_closed_bias_id(self, symbol: str) -> Optional[str]:
+        with self.Session() as session:
+            row = (
+                session.query(TradeJournal)
+                .filter(
+                    TradeJournal.symbol == symbol,
+                    TradeJournal.status == "closed",
+                    TradeJournal.bias_id.isnot(None),
+                )
+                .order_by(TradeJournal.closed_at.desc())
+                .first()
+            )
+            return row.bias_id if row else None
 
     def list_open_trades_with_contracts(self, max_age_hours: int = 48) -> list[dict]:
         """Open journal rows that have a Deriv contract_id (for reconcile)."""

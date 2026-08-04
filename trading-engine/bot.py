@@ -625,7 +625,12 @@ class TradingBot:
             )
         self._bias_state[symbol] = bias
 
+        # Rolling 8h enter-now projection (advisory + soft gate on 1h eval)
+        proj = self._refresh_projection(symbol, df)
+
         gates = {"passed": [f"regime:{regime.label}", f"bias:{bias.direction}"], "failed": []}
+        if proj is not None:
+            gates["passed"].append(f"projection:{proj.direction}")
         entry_tf = settings.BIAS_ENTRY_TF_MINUTES
         on_entry_bar = is_entry_bar_close(epoch, entry_tf)
 
@@ -649,7 +654,56 @@ class TradingBot:
             )
             return
 
-        # 1h evaluation
+        # Soft gate: projection must agree with bias (+ 8h stance not opposing)
+        stance_8h = None
+        long8 = self._8h_review.get(symbol)
+        if long8 is not None:
+            stance_8h = long8.stance
+        proj_ok, proj_passed, proj_failed = projection_agrees_with_bias(
+            bias.direction,
+            proj if proj is not None else compute_horizon_projection(df),
+            stance_8h=stance_8h,
+        )
+        gates["passed"] = list(dict.fromkeys(gates["passed"] + list(proj_passed)))
+        gates["failed"] = list(dict.fromkeys(gates["failed"] + list(proj_failed)))
+
+        if not proj_ok:
+            skip = "projection_not_aligned"
+            if "bias_no_trade" in proj_failed:
+                skip = "bias_no_trade"
+            self._record_analysis(
+                symbol,
+                price=price,
+                regime=regime.label,
+                rsi=bias.rsi,
+                atr=bias.atr_6h,
+                epoch=epoch,
+                bars=len(df),
+                best_strategy="bias_pipeline",
+                confidence=None,
+                skip_reason=skip,
+                signal_direction=None,
+                bias=bias.direction,
+                bias_id=bias.bias_id,
+                gates=gates,
+                pipeline="bias_v1",
+            )
+            self.feature_store.log(
+                symbol=symbol,
+                event="skip",
+                features={
+                    "skip": skip,
+                    "projection": proj.to_dict() if proj else None,
+                    "stance_8h": stance_8h,
+                    "gates": gates,
+                },
+                bias_id=bias.bias_id,
+                regime=regime.label,
+                bias=bias.direction,
+            )
+            return
+
+        # 1h evaluation (after projection agreement)
         confirm = confirm_1h_entry(
             df,
             bias,
@@ -660,6 +714,9 @@ class TradingBot:
         feats = build_feature_dict(
             symbol=symbol, regime=regime, bias=bias, confirm=confirm
         )
+        if proj is not None:
+            feats["projection"] = proj.to_dict()
+            feats["stance_8h"] = stance_8h
         self.feature_store.log(
             symbol=symbol,
             event="evaluate",
@@ -669,8 +726,8 @@ class TradingBot:
             bias=bias.direction,
         )
         gates = {
-            "passed": list(confirm.gates_passed),
-            "failed": list(confirm.gates_failed),
+            "passed": list(dict.fromkeys(list(proj_passed) + list(confirm.gates_passed))),
+            "failed": list(dict.fromkeys(list(proj_failed) + list(confirm.gates_failed))),
         }
 
         if bias.direction == "NO_TRADE":
@@ -821,8 +878,8 @@ class TradingBot:
         entry = confirm.entry_price or price
         sl, tp, method = bias_sl_tp(bias, entry, direction)
         gates_payload = {
-            "passed": confirm.gates_passed,
-            "failed": confirm.gates_failed,
+            "passed": gates["passed"],
+            "failed": gates["failed"],
             "confirm_type": confirm.confirm_type,
         }
         signal = make_signal(
@@ -839,10 +896,11 @@ class TradingBot:
             confidence=0.0,
             market_condition=regime.label,
             score_breakdown={
-                "gates_passed": confirm.gates_passed,
-                "gates_failed": confirm.gates_failed,
+                "gates_passed": gates["passed"],
+                "gates_failed": gates["failed"],
                 "confirm_type": confirm.confirm_type,
                 "pipeline": "bias_v1",
+                "projection": proj.direction if proj else None,
             },
             suggested_sl=sl,
             suggested_tp=tp,

@@ -138,14 +138,14 @@ def compute_horizon_projection(
         invalidation = entry
         pointers.append(f"chop_box ±{base_mult:.1f}×ATR for next {forward}h")
         pointers.append("stand_aside_until_range_break")
-    elif (
+    elif ret > 0 and (
         aligned_up
-        and ret > 0
-        and (structure.higher_highs or structure.higher_lows or structure.trend == "up")
-        and not (structure.lower_highs and structure.lower_lows)
-    ):
+        or structure.trend == "up"
+        or structure.higher_highs
+        or structure.higher_lows
+    ) and not (structure.lower_highs and structure.lower_lows):
         direction = "up"
-        reasons.append("bull_structure_stack")
+        reasons.append("bull_structure_stack" if aligned_up else "bull_return_structure")
         weak = structure.trend != "up" or not aligned_up
         base_mult = (0.5 if weak else 1.0) * k
         bull_mult = 1.5 * k
@@ -159,14 +159,14 @@ def compute_horizon_projection(
         pointers.append(f"first_target_base={base:.5f}")
         pointers.append(f"stretch_bull={bull:.5f}")
         pointers.append(f"invalidation_below={invalidation:.5f}")
-    elif (
+    elif ret < 0 and (
         aligned_down
-        and ret < 0
-        and (structure.lower_highs or structure.lower_lows or structure.trend == "down")
-        and not (structure.higher_highs and structure.higher_lows)
-    ):
+        or structure.trend == "down"
+        or structure.lower_highs
+        or structure.lower_lows
+    ) and not (structure.higher_highs and structure.higher_lows):
         direction = "down"
-        reasons.append("bear_structure_stack")
+        reasons.append("bear_structure_stack" if aligned_down else "bear_return_structure")
         weak = structure.trend != "down" or not aligned_down
         base_mult = (0.5 if weak else 1.0) * k
         bull_mult = 1.0 * k

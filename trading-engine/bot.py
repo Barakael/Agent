@@ -308,6 +308,24 @@ class TradingBot:
                 cached["review_mid"] = self._mid_review[symbol].to_dict()
             if symbol in self._8h_review:
                 cached["review_8h"] = self._8h_review[symbol].to_dict()
+            if symbol in self._projection:
+                cached["projection"] = self._projection[symbol].to_dict()
+
+    def _refresh_projection(self, symbol: str, df) -> Optional[HorizonProjection]:
+        """Recompute rolling 8h structure+ATR projection (enter-now advisory)."""
+        if not getattr(settings, "PROJECTION_ENABLED", True):
+            return self._projection.get(symbol)
+        if df is None or len(df) == 0:
+            return self._projection.get(symbol)
+        proj = compute_horizon_projection(
+            df,
+            lookback_hours=int(settings.PROJECTION_LOOKBACK_HOURS),
+            forward_hours=int(settings.PROJECTION_FORWARD_HOURS),
+            bar_minutes=settings.CANDLE_TIMEFRAME_MINUTES,
+            atr_mult=float(settings.PROJECTION_ATR_MULT),
+        )
+        self._projection[symbol] = proj
+        return proj
 
     def _log_horizon_review(self, review: HorizonReview, *, event: str) -> None:
         try:
@@ -346,6 +364,8 @@ class TradingBot:
                     row["review_mid"] = self._mid_review[symbol].to_dict()
                 if symbol in self._8h_review:
                     row["review_8h"] = self._8h_review[symbol].to_dict()
+                if symbol in self._projection:
+                    row["projection"] = self._projection[symbol].to_dict()
                 out.append(row)
             else:
                 df = self.aggregator.get_dataframe(symbol)
@@ -379,6 +399,8 @@ class TradingBot:
                     row["review_mid"] = self._mid_review[symbol].to_dict()
                 if symbol in self._8h_review:
                     row["review_8h"] = self._8h_review[symbol].to_dict()
+                if symbol in self._projection:
+                    row["projection"] = self._projection[symbol].to_dict()
                 out.append(row)
         return out
 

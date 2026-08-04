@@ -15,6 +15,11 @@ from analysis.horizon_review import (
     compute_mid_review,
     is_horizon_bar_close,
 )
+from analysis.horizon_projection import (
+    HorizonProjection,
+    compute_horizon_projection,
+    projection_agrees_with_bias,
+)
 from analysis.multi_timeframe import higher_timeframe_aligned
 from bias import (
     FeatureStore,
@@ -88,6 +93,7 @@ class TradingBot:
         self._traded_bias_ids: dict[str, str] = {}
         self._mid_review: dict[str, HorizonReview] = {}
         self._8h_review: dict[str, HorizonReview] = {}
+        self._projection: dict[str, HorizonProjection] = {}
         self.plan_store = plan_store
 
     def get_active_plan(self) -> Optional[DailyPlan]:
@@ -210,6 +216,9 @@ class TradingBot:
             entry["review_mid"] = mid.to_dict()
         if long8 is not None:
             entry["review_8h"] = long8.to_dict()
+        proj = self._projection.get(symbol)
+        if proj is not None:
+            entry["projection"] = proj.to_dict()
         self._last_analysis[symbol] = entry
 
     def get_horizon_reviews(self) -> list[dict]:
@@ -218,11 +227,21 @@ class TradingBot:
         for symbol in self.active_pairs:
             mid = self._mid_review.get(symbol)
             long8 = self._8h_review.get(symbol)
+            proj = self._projection.get(symbol)
+            # Prefer live rolling projection; fall back to review-attached
+            projection = None
+            if proj is not None:
+                projection = proj.to_dict()
+            elif long8 and long8.projection:
+                projection = long8.projection
+            elif mid and mid.projection:
+                projection = mid.projection
             out.append(
                 {
                     "symbol": symbol,
                     "review_mid": mid.to_dict() if mid else None,
                     "review_8h": long8.to_dict() if long8 else None,
+                    "projection": projection,
                     "mid_hours": settings.REVIEW_MID_HOURS,
                     "long_hours": settings.REVIEW_8H_HOURS,
                     "enabled": settings.uses_horizon_review(symbol),

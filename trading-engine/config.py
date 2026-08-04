@@ -81,6 +81,13 @@ class Settings(BaseSettings):
     REVIEW_8H_HOURS: int = int(os.getenv("REVIEW_8H_HOURS", "8"))
     REVIEW_HORIZON_SYMBOLS: str = os.getenv("REVIEW_HORIZON_SYMBOLS", "")  # empty = active pairs
 
+    # 8h structure+ATR “enter now” projection + soft gate vs 6h bias
+    PROJECTION_ENABLED: bool = os.getenv("PROJECTION_ENABLED", "true").lower() == "true"
+    PROJECTION_LOOKBACK_HOURS: int = int(os.getenv("PROJECTION_LOOKBACK_HOURS", "8"))
+    PROJECTION_FORWARD_HOURS: int = int(os.getenv("PROJECTION_FORWARD_HOURS", "6"))
+    PROJECTION_ATR_MULT: float = float(os.getenv("PROJECTION_ATR_MULT", "1.0"))
+    PROJECTION_SOFT_GATE: bool = os.getenv("PROJECTION_SOFT_GATE", "true").lower() == "true"
+
     # Indicators
     RSI_PERIOD: int = int(os.getenv("RSI_PERIOD", "14"))
     RSI_OVERSOLD: float = float(os.getenv("RSI_OVERSOLD", "30"))

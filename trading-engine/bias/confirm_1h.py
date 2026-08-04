@@ -98,7 +98,8 @@ def confirm_1h_entry(
     passed.append(f"regime:{regime.label}")
 
     htf = _to_1h(df_5m, entry_tf, bar_minutes)
-    if len(htf) < 30:
+    # 24 × 1h = 1 day of HTF context; needs ≥288 × 5m bars (buffer default 400)
+    if len(htf) < 24:
         return ConfirmResult(
             ok=False,
             direction="none",

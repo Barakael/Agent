@@ -125,6 +125,49 @@ def test_bias_range_regime_blocks():
     assert any("regime_blocks" in r for r in bias.reasons)
 
 
+def test_confirm_288_5m_bars_clears_insufficient_1h_gate():
+    """288 × 5m → 24 × 1h: bar-count gate must pass (other confirm gates may still fail)."""
+    n = 288  # exactly 24 hours of 5m → 24 hourly bars after resample
+    closes = np.linspace(100, 118, n)
+    df = _ohlc_from_closes(closes, wick=0.1)
+    # Fewer than 24×12=288 fails the floor
+    short = df.iloc[: 23 * 12].copy()
+    # Realign epochs on short df so last bar still on hour if possible
+    short = short.reset_index(drop=True)
+
+    reg = RegimeState(
+        label="strong_bull",
+        return_24h=0.05,
+        atr=0.5,
+        atr_ratio=1.2,
+        ema_aligned_up=True,
+        ema_aligned_down=False,
+        structure_trend="up",
+        reasons=[],
+    )
+    bias = BiasState(
+        direction="BUY_ONLY",
+        bias_id="bargate01",
+        range_high=float(df["high"].max()),
+        range_low=float(df["low"].min()),
+        atr_6h=0.5,
+        return_6h=0.02,
+        structure_trend="up",
+        ema_aligned_up=True,
+        ema_aligned_down=False,
+        rsi=55.0,
+        reasons=["test"],
+    )
+
+    short_result = confirm_1h_entry(short, bias, reg)
+    assert "insufficient_1h_bars" in short_result.gates_failed
+
+    full_result = confirm_1h_entry(df, bias, reg)
+    assert "insufficient_1h_bars" not in full_result.gates_failed
+    # May still fail EMA/rejection/RSI — that is fine; bar gate is what we test
+    assert "bias:BUY_ONLY" in full_result.gates_passed
+
+
 def test_confirm_rejects_near_ema_without_rejection():
     """Bars near EMA21 but no pin/engulf/break → fail hard gates."""
     n = 360

@@ -15,6 +15,7 @@ from typing import Literal, Optional
 import pandas as pd
 
 from config import settings
+from analysis.horizon_projection import compute_horizon_projection
 from indicators.atr import compute_atr
 from indicators.ema import compute_ema
 from indicators.macd import compute_macd
@@ -45,9 +46,10 @@ class HorizonReview:
     reasons: list[str] = field(default_factory=list)
     watch: list[str] = field(default_factory=list)
     valid_until_epoch: int = 0
+    projection: Optional[dict] = None
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "hours": self.hours,
             "stance": self.stance,
             "review_id": self.review_id,
@@ -67,6 +69,9 @@ class HorizonReview:
             "valid_until_epoch": self.valid_until_epoch,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+        if self.projection is not None:
+            out["projection"] = self.projection
+        return out
 
 
 def is_horizon_bar_close(epoch: int, hours: int) -> bool:
@@ -119,6 +124,7 @@ def compute_horizon_review(
             reasons=["insufficient_bars"],
             watch=["wait_for_warmup"],
             valid_until_epoch=valid_until,
+            projection=None,
         )
 
     window = df_5m.iloc[-bars_needed:].copy()
@@ -192,6 +198,21 @@ def compute_horizon_review(
         reasons.append("mixed_or_choppy_horizon")
         watch.append("wait_for_clear_structure")
 
+    proj: Optional[dict] = None
+    if getattr(settings, "PROJECTION_ENABLED", True):
+        try:
+            hp = compute_horizon_projection(
+                df_5m,
+                lookback_hours=int(settings.PROJECTION_LOOKBACK_HOURS),
+                forward_hours=int(settings.PROJECTION_FORWARD_HOURS),
+                bar_minutes=bar_minutes,
+            )
+            proj = hp.to_dict()
+            watch.append(f"projection={hp.direction}")
+            watch.append(f"base_target={hp.base:.5f}")
+        except Exception:
+            proj = None
+
     return HorizonReview(
         hours=hours,
         stance=stance,
@@ -210,6 +231,7 @@ def compute_horizon_review(
         reasons=reasons,
         watch=watch,
         valid_until_epoch=valid_until,
+        projection=proj,
     )
 
 

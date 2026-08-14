@@ -5,18 +5,28 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, Callable, Dict, List, Optional
+import re
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import websockets
 from websockets.client import WebSocketClientProtocol
 
 from config import settings
 
+if TYPE_CHECKING:
+    from execution.multiplier import ContractCalibration
+
 logger = logging.getLogger(__name__)
 
 
 class DerivWebSocketClient:
     """Async Deriv WebSocket API client."""
+
+    # Deriv runs two WebSocket schemas. The legacy endpoint names an instrument
+    # as ``symbol``; the newer Options endpoint requires ``underlying_symbol``
+    # and rejects the other outright. Which one applies depends on the app id and
+    # URL, so the client tries both and remembers what the endpoint accepted.
+    SYMBOL_KEYS = ("underlying_symbol", "symbol")
 
     def __init__(
         self,
@@ -40,6 +50,7 @@ class DerivWebSocketClient:
         # Reconnect backoff (seconds since epoch of next allowed attempt)
         self._reconnect_after: float = 0.0
         self._reconnect_backoff_sec: float = 30.0
+        self._symbol_key: Optional[str] = None
 
     def _next_id(self) -> int:
         self._req_id += 1
@@ -201,6 +212,45 @@ class DerivWebSocketClient:
         except asyncio.TimeoutError:
             self._pending.pop(req_id, None)
             raise TimeoutError(f"Deriv API timeout for {payload}")
+
+    @staticmethod
+    def _rejected_property(error: Any) -> Optional[str]:
+        """Field name the endpoint refused, from an InputValidationFailed error."""
+        if not isinstance(error, dict):
+            return None
+        if str(error.get("code")) != "InputValidationFailed":
+            return None
+        match = re.search(
+            r"Properties not allowed:\s*([A-Za-z0-9_]+)", str(error.get("message") or "")
+        )
+        return match.group(1) if match else None
+
+    @property
+    def symbol_key(self) -> Optional[str]:
+        """Which instrument field this endpoint accepted, once known."""
+        return self._symbol_key
+
+    async def _send_for_symbol(
+        self, payload: dict, symbol: str, timeout: float = 30.0
+    ) -> dict:
+        """Send a request that names an instrument, adapting to the endpoint schema.
+
+        A rejection that names the instrument field means the other spelling is
+        wanted. Any other error means the field was accepted and the request
+        failed for a real reason, so it is returned as-is.
+        """
+        candidates = (self._symbol_key,) if self._symbol_key else self.SYMBOL_KEYS
+        response: dict = {}
+        for key in candidates:
+            response = await self._send({**payload, key: symbol}, timeout=timeout)
+            error = response.get("error") if isinstance(response, dict) else None
+            if self._rejected_property(error) == key:
+                continue
+            if self._symbol_key != key:
+                logger.info("Deriv endpoint expects '%s' for instruments", key)
+            self._symbol_key = key
+            return response
+        return response
 
     async def _authorize_via_otp(self) -> dict:
         """New Deriv API: REST list accounts → OTP → authenticated WebSocket."""
@@ -386,14 +436,19 @@ class DerivWebSocketClient:
         symbol: str,
         granularity: int,
         count: int = 200,
+        end: Optional[int | str] = None,
     ) -> List[dict]:
-        """Fetch OHLC history from Deriv ticks_history API."""
+        """Fetch OHLC history from Deriv ticks_history API.
+
+        ``end`` accepts an epoch so callers can walk backwards through history;
+        it defaults to the most recent completed candle.
+        """
         resp = await self._send(
             {
                 "ticks_history": symbol,
                 "adjust_start_time": 1,
                 "count": count,
-                "end": "latest",
+                "end": "latest" if end is None else end,
                 "granularity": granularity,
                 "style": "candles",
             },
@@ -414,6 +469,153 @@ class DerivWebSocketClient:
             for c in candles
         ]
 
+    async def get_candles_paged(
+        self,
+        symbol: str,
+        granularity: int,
+        total: int,
+        page_size: int = 5000,
+        end: Optional[int] = None,
+    ) -> List[dict]:
+        """Page backwards until ``total`` candles are gathered.
+
+        Deriv caps one ``ticks_history`` reply at a few thousand candles, so a
+        multi-week 5m window has to be stitched from several requests. Pages are
+        deduplicated by epoch and returned oldest-first.
+        """
+        by_epoch: Dict[int, dict] = {}
+        cursor: Optional[int] = end
+        page_size = max(1, min(page_size, 5000))
+
+        while len(by_epoch) < total:
+            want = min(page_size, total - len(by_epoch))
+            page = await self.get_candles_history(
+                symbol, granularity, count=want, end=cursor
+            )
+            if not page:
+                break
+
+            fresh = [c for c in page if int(c["epoch"]) not in by_epoch]
+            for candle in page:
+                by_epoch[int(candle["epoch"])] = candle
+
+            oldest = min(int(c["epoch"]) for c in page)
+            # No older data arrived, so the series has been exhausted.
+            if not fresh or (cursor is not None and oldest >= cursor):
+                break
+            cursor = oldest - granularity
+
+        ordered = [by_epoch[e] for e in sorted(by_epoch)]
+        return ordered[-total:] if total and len(ordered) > total else ordered
+
+    async def get_allowed_multipliers(self, symbol: str) -> List[float]:
+        """Multiplier values Deriv currently offers for a symbol.
+
+        Reads ``contracts_for`` and falls back to probing with an out-of-range
+        value, since the rejection reports the permitted list.
+        """
+        # ``currency`` is optional on the legacy endpoint and rejected outright by
+        # the newer one, so it is omitted rather than sent hopefully.
+        resp = await self._send({"contracts_for": symbol}, timeout=30.0)
+        values: set[float] = set()
+        if "error" not in resp:
+            available = (resp.get("contracts_for") or {}).get("available", []) or []
+            for item in available:
+                if str(item.get("contract_category")) != "multiplier" and str(
+                    item.get("contract_type")
+                ) not in {"MULTUP", "MULTDOWN"}:
+                    continue
+                for key in ("multiplier_range", "multipliers"):
+                    for raw in item.get(key) or []:
+                        try:
+                            values.add(float(raw))
+                        except (TypeError, ValueError):
+                            continue
+        if values:
+            return sorted(values)
+
+        probe = await self._send_for_symbol(
+            {
+                "proposal": 1,
+                "amount": 10,
+                "basis": "stake",
+                "contract_type": "MULTUP",
+                "currency": "USD",
+                "multiplier": 99999,
+            },
+            symbol,
+        )
+        error = probe.get("error") if isinstance(probe, dict) else None
+        if isinstance(error, dict):
+            from execution.multiplier import parse_allowed_from_error
+
+            return sorted(parse_allowed_from_error(error))
+        return []
+
+    async def calibrate_contract(
+        self, symbol: str, stake: float, multiplier: float
+    ) -> Optional["ContractCalibration"]:
+        """Ask the venue where two different dollar stops would actually fire.
+
+        Proposals are free and quote a trigger price per limit order, so the
+        relationship between a dollar limit and a chart level can be measured
+        instead of assumed. Returns None if the venue does not quote triggers.
+        """
+        from execution.multiplier import fit_calibration
+
+        room = 1.0 / max(float(multiplier), 1e-9)
+        # Two stops inside the contract's room, far enough apart to fit a line.
+        probes = [
+            round(stake * multiplier * room * 0.4, 2),
+            round(stake * multiplier * room * 0.8, 2),
+        ]
+        spot = 0.0
+        observations: list[tuple[float, float]] = []
+        for amount in probes:
+            resp = await self._send_for_symbol(
+                {
+                    "proposal": 1,
+                    "amount": stake,
+                    "basis": "stake",
+                    "contract_type": "MULTUP",
+                    "currency": "USD",
+                    "multiplier": float(multiplier),
+                    "limit_order": {"stop_loss": amount},
+                },
+                symbol,
+            )
+            proposal = resp.get("proposal") if isinstance(resp, dict) else None
+            if not isinstance(proposal, dict):
+                logger.debug("Calibration probe rejected for %s: %s", symbol, resp)
+                continue
+            spot = float(proposal.get("spot") or spot)
+            node = (proposal.get("limit_order") or {}).get("stop_loss")
+            if not isinstance(node, dict):
+                continue
+            try:
+                observations.append((amount, float(node["value"])))
+            except (KeyError, TypeError, ValueError):
+                continue
+
+        calibration = fit_calibration(
+            spot, observations, symbol=symbol, stake=stake, multiplier=multiplier
+        )
+        if calibration:
+            logger.info(
+                "Calibrated %s at x%g: notional %.2f (gross %.2f), cost $%.4f per trade",
+                symbol,
+                multiplier,
+                calibration.notional,
+                calibration.gross_notional,
+                calibration.cost,
+            )
+        else:
+            logger.warning(
+                "Could not calibrate %s — falling back to stake x multiplier arithmetic",
+                symbol,
+            )
+        return calibration
+
     async def buy_contract(
         self,
         symbol: str,
@@ -425,12 +627,19 @@ class DerivWebSocketClient:
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None,
         multiplier: Optional[float] = None,
+        stop_loss_pct: Optional[float] = None,
+        take_profit_pct: Optional[float] = None,
     ) -> dict:
         """Place a contract via proposal + buy flow.
 
-        New Options WebSocket schema uses ``underlying_symbol`` (legacy ``symbol``
-        is rejected with InputValidationFailed). Multiplier contracts omit duration
-        and support early ``sell``; binary CALL/PUT often cannot be resold.
+        The instrument field differs between Deriv endpoints, so it is filled in by
+        ``_send_for_symbol`` rather than hardcoded. Multiplier contracts omit
+        duration and support early ``sell``; binary CALL/PUT often cannot be resold.
+
+        ``stop_loss_pct`` / ``take_profit_pct`` carry the chart distances as
+        fractions of entry price. When Deriv forces a different multiplier the
+        dollar limits are recomputed from them, so the position keeps the planned
+        chart distance instead of inheriting a stop meant for another multiplier.
         """
         proposal_payload: Dict[str, Any] = {
             "proposal": 1,
@@ -438,7 +647,6 @@ class DerivWebSocketClient:
             "basis": basis,
             "contract_type": contract_type,
             "currency": "USD",
-            "underlying_symbol": symbol,
         }
         is_multiplier = contract_type in {"MULTUP", "MULTDOWN"} or multiplier is not None
         if is_multiplier:
@@ -457,7 +665,7 @@ class DerivWebSocketClient:
             if take_profit is not None:
                 proposal_payload.setdefault("limit_order", {})["take_profit"] = round(float(take_profit), 2)
 
-        proposal_resp = await self._send(proposal_payload)
+        proposal_resp = await self._send_for_symbol(proposal_payload, symbol)
         if "error" in proposal_resp:
             err = proposal_resp["error"]
             # Retry once with lowest allowed multiplier when Deriv rejects our value
@@ -488,7 +696,29 @@ class DerivWebSocketClient:
                         allowed_str,
                     )
                     proposal_payload["multiplier"] = retry_mult
-                    proposal_resp = await self._send(proposal_payload)
+                    # Dollar limits are multiplier-dependent; rebuild them from the
+                    # chart percentages so the stop keeps its intended distance.
+                    if stop_loss_pct or take_profit_pct:
+                        from execution.multiplier import usd_from_pct
+
+                        limits = proposal_payload.setdefault("limit_order", {})
+                        if stop_loss_pct:
+                            limits["stop_loss"] = round(
+                                usd_from_pct(amount, retry_mult, stop_loss_pct), 2
+                            )
+                        if take_profit_pct:
+                            limits["take_profit"] = round(
+                                usd_from_pct(amount, retry_mult, take_profit_pct), 2
+                            )
+                        logger.warning(
+                            "Rebuilt limits for multiplier %s: sl=%s tp=%s",
+                            retry_mult,
+                            limits.get("stop_loss"),
+                            limits.get("take_profit"),
+                        )
+                    proposal_resp = await self._send_for_symbol(
+                        proposal_payload, symbol
+                    )
                     if "error" not in proposal_resp:
                         err = None
             if "error" in proposal_resp:

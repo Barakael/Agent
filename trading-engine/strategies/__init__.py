@@ -71,6 +71,12 @@ def get_strategy(strategy_id: str):
     return _REGISTRY.get(resolve_strategy_id(strategy_id))
 
 
+def denylist_strategy_ids() -> set[str]:
+    """Strategies barred from trading regardless of allowlist or regime routing."""
+    text = str(getattr(settings, "STRATEGY_DENYLIST", "") or "")
+    return {resolve_strategy_id(p.strip()) for p in text.split(",") if p.strip()}
+
+
 def allowlist_strategy_ids() -> list[str]:
     """Resolved STRATEGY_ALLOWLIST ids; empty list means no restriction."""
     raw = list(getattr(settings, "strategy_allowlist", None) or [])
@@ -80,11 +86,12 @@ def allowlist_strategy_ids() -> list[str]:
         raw = [p.strip() for p in text.split(",") if p.strip()]
     if not raw:
         return []
+    denied = denylist_strategy_ids()
     seen: set[str] = set()
     out: list[str] = []
     for sid in raw:
         resolved = resolve_strategy_id(sid)
-        if resolved in seen:
+        if resolved in seen or resolved in denied:
             continue
         seen.add(resolved)
         out.append(resolved)
@@ -92,8 +99,11 @@ def allowlist_strategy_ids() -> list[str]:
 
 
 def apply_strategy_allowlist(strategy_ids: Iterable[str]) -> list[str]:
-    """Filter requested ids by allowlist when configured."""
-    requested = [resolve_strategy_id(s) for s in strategy_ids]
+    """Filter requested ids by the denylist, then the allowlist when configured."""
+    denied = denylist_strategy_ids()
+    requested = [
+        s for s in (resolve_strategy_id(s) for s in strategy_ids) if s not in denied
+    ]
     allowed = allowlist_strategy_ids()
     if not allowed:
         return requested

@@ -16,6 +16,7 @@ from backtest.runner import BacktestRunner
 from bot import TradingBot
 from config import settings
 from journal.writer import JournalWriter
+from execution.orders import UnencodableStop
 from risk.gate import RiskGate
 
 logging.basicConfig(
@@ -307,13 +308,21 @@ async def manual_order(body: ManualOrderRequest, auth: bool = Depends(validate_a
         raise HTTPException(status_code=403, detail=check.reason)
     if bot is None:
         raise HTTPException(status_code=503, detail="Bot not available")
-    result = await bot.executor.execute_manual(
-        body.symbol,
-        body.direction,
-        body.stake,
-        body.stop_loss,
-        body.take_profit,
-    )
+    entry = None
+    df = bot.aggregator.get_dataframe(body.symbol)
+    if df is not None and len(df):
+        entry = float(df["close"].iloc[-1])
+    try:
+        result = await bot.executor.execute_manual(
+            body.symbol,
+            body.direction,
+            body.stake,
+            body.stop_loss,
+            body.take_profit,
+            entry=entry,
+        )
+    except UnencodableStop as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"status": "placed", "data": result}
 
 

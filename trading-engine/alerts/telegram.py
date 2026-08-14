@@ -34,6 +34,26 @@ class TelegramAlerter:
             logger.exception("Telegram send failed")
             return False
 
+    async def send_photo(self, path: str, caption: str = "") -> bool:
+        """Send a chart. Telegram caps captions at 1024 characters."""
+        if not self.enabled:
+            logger.debug("Telegram disabled: would send %s", path)
+            return False
+        url = f"https://api.telegram.org/bot{self.token}/sendPhoto"
+        try:
+            with open(path, "rb") as handle:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    resp = await client.post(
+                        url,
+                        data={"chat_id": self.chat_id, "caption": caption[:1024]},
+                        files={"photo": handle},
+                    )
+                    resp.raise_for_status()
+            return True
+        except Exception:
+            logger.exception("Telegram photo send failed for %s", path)
+            return False
+
     async def trade_opened(self, symbol: str, direction: str, stake: float, mode: str) -> None:
         await self.send(
             f"<b>Trade opened</b> ({mode})\n"

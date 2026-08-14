@@ -6,6 +6,7 @@ from typing import Optional
 
 import pandas as pd
 
+from config import settings
 from number_engine.snapshot import MarketSnapshot
 from signals.engine import SignalDirection
 from strategies.base import (
@@ -16,6 +17,17 @@ from strategies.base import (
     evaluation_to_signal,
     no_trade,
 )
+
+REJECTION_PATTERNS = frozenset({"pin", "engulfing"})
+KNOWN_PATTERNS = REJECTION_PATTERNS | {"break_of_structure"}
+
+
+def allowed_patterns() -> frozenset[str]:
+    """Entry patterns this strategy may trade, from PRICE_ACTION_PATTERNS."""
+    raw = str(settings.PRICE_ACTION_PATTERNS or "").strip()
+    if not raw:
+        return REJECTION_PATTERNS
+    return frozenset(p.strip() for p in raw.split(",") if p.strip())
 
 
 class PriceActionStrategy:
@@ -29,30 +41,37 @@ class PriceActionStrategy:
         scores: dict[str, float] = {}
         reasons: list[str] = []
         direction: Optional[SignalDirection] = None
+        pattern: Optional[str] = None
 
         # Pattern (30)
         if snapshot.engulfing == "bullish_engulfing":
             direction = SignalDirection.BUY
+            pattern = "engulfing"
             scores["pattern"] = 30
             reasons.append("Bullish engulfing")
         elif snapshot.engulfing == "bearish_engulfing":
             direction = SignalDirection.SELL
+            pattern = "engulfing"
             scores["pattern"] = 30
             reasons.append("Bearish engulfing")
         elif snapshot.pin_bar == "bullish_pin":
             direction = SignalDirection.BUY
+            pattern = "pin"
             scores["pattern"] = 28
             reasons.append("Bullish pin bar")
         elif snapshot.pin_bar == "bearish_pin":
             direction = SignalDirection.SELL
+            pattern = "pin"
             scores["pattern"] = 28
             reasons.append("Bearish pin bar")
         elif snapshot.break_of_structure_up:
             direction = SignalDirection.BUY
+            pattern = "break_of_structure"
             scores["pattern"] = 25
             reasons.append("Break of structure up")
         elif snapshot.break_of_structure_down:
             direction = SignalDirection.SELL
+            pattern = "break_of_structure"
             scores["pattern"] = 25
             reasons.append("Break of structure down")
         elif snapshot.inside_bar:
@@ -60,7 +79,17 @@ class PriceActionStrategy:
         else:
             return no_trade(self.strategy_id, ["No price-action pattern"])
 
-        assert direction is not None
+        assert direction is not None and pattern is not None
+
+        # Context supplies 80 of the 100 points, so confidence alone cannot say
+        # "only rejections" — the allowed set has to be checked directly.
+        allowed = allowed_patterns()
+        if pattern not in allowed:
+            return no_trade(
+                self.strategy_id,
+                [f"Pattern {pattern} not enabled (allowed: {', '.join(sorted(allowed))})"],
+                {"pattern_rejected": pattern},
+            )
 
         # Structure context (25)
         if direction == SignalDirection.BUY and (
@@ -110,6 +139,7 @@ class PriceActionStrategy:
             suggested_sl=sl,
             suggested_tp=tp,
             sl_tp_method=method,
+            pattern=pattern,
         )
 
     def evaluate(

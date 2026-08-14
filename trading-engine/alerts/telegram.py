@@ -54,6 +54,12 @@ class TelegramAlerter:
             logger.exception("Telegram photo send failed for %s", path)
             return False
 
+    async def daily_brief(self, text: str, charts: list[str] | None = None) -> None:
+        """The morning read: one message, then a chart per instrument."""
+        await self.send(f"<b>Daily brief</b>\n<pre>{text}</pre>")
+        for chart in charts or []:
+            await self.send_photo(chart)
+
     async def trade_opened(self, symbol: str, direction: str, stake: float, mode: str) -> None:
         await self.send(
             f"<b>Trade opened</b> ({mode})\n"

@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from data.candle_aggregator import CandleAggregator
 
 
@@ -38,3 +39,37 @@ def test_historical_seed_forms_current_and_closes_next_bucket():
         agg.on_tick("frxEURUSD", 1.1 + i * 0.001, bucket + 300)
     df = agg.get_dataframe("frxEURUSD")
     assert len(df) <= 4  # buffer 3 + current
+
+
+def test_weekend_gap_does_not_fabricate_bars():
+    """Forex is shut for ~65h. The buffer should skip it, not fill it."""
+    agg = CandleAggregator(timeframe_minutes=5, buffer_size=500)
+    friday_close = int(
+        datetime(2026, 8, 14, 20, 50, tzinfo=timezone.utc).timestamp() // 300 * 300
+    )
+    sunday_open = int(
+        datetime(2026, 8, 16, 21, 5, tzinfo=timezone.utc).timestamp() // 300 * 300
+    )
+
+    agg.on_tick("frxEURUSD", 1.1600, friday_close)
+    closed = agg.on_tick("frxEURUSD", 1.1650, sunday_open)
+
+    assert closed is not None
+    assert closed.epoch == friday_close
+    df = agg.get_dataframe("frxEURUSD")
+    # Two bars either side of the break, not the ~780 buckets it spans.
+    assert len(df) == 2
+    assert list(df["epoch"]) == [friday_close, sunday_open]
+
+
+def test_elapsed_time_across_a_gap_comes_from_timestamps_not_bar_count():
+    """Two adjacent bars can be 65 hours apart; bar counting would say 5 minutes."""
+    agg = CandleAggregator(timeframe_minutes=5, buffer_size=500)
+    friday = int(datetime(2026, 8, 14, 20, 50, tzinfo=timezone.utc).timestamp() // 300 * 300)
+    sunday = int(datetime(2026, 8, 16, 21, 5, tzinfo=timezone.utc).timestamp() // 300 * 300)
+    agg.on_tick("frxEURUSD", 1.16, friday)
+    agg.on_tick("frxEURUSD", 1.165, sunday)
+
+    df = agg.get_dataframe("frxEURUSD")
+    gap_hours = (int(df["epoch"].iloc[1]) - int(df["epoch"].iloc[0])) / 3600
+    assert gap_hours > 48

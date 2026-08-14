@@ -100,7 +100,7 @@ class JournalWriter:
         from execution.orders import usd_limit_from_risk
 
         if stop_loss_usd is None or take_profit_usd is None:
-            computed_sl, computed_tp = usd_limit_from_risk(risk)
+            computed_sl, computed_tp = usd_limit_from_risk(risk, float(signal.price))
             stop_loss_usd = stop_loss_usd if stop_loss_usd is not None else computed_sl
             take_profit_usd = take_profit_usd if take_profit_usd is not None else computed_tp
 

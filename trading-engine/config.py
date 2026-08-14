@@ -28,8 +28,37 @@ class Settings(BaseSettings):
     DERIV_DEMO_LOGINID: str = os.getenv("DERIV_DEMO_LOGINID", "")
     # New API: options account id for OTP WebSocket (from REST list accounts)
     DERIV_ACCOUNT_ID: str = os.getenv("DERIV_ACCOUNT_ID", "")
-    # Multiplier contracts on synthetics — 100 is often invalid; 80 is commonly accepted
-    DERIV_MULTIPLIER: float = float(os.getenv("DERIV_MULTIPLIER", "80"))
+    # Liquidation happens at 1/multiplier, which caps how wide a stop can be.
+    # Deriv offers 100/200/300/500/800 on forex, so 100 is the most room available
+    # (1.0% of price) and the only value that holds a one-ATR stop on the majors,
+    # whose daily ATR measures 0.4-0.7%. Synthetics start at 80 (1.25% of room)
+    # against a 4% daily ATR, which is why they were dropped. See
+    # scripts/instrument_fit.py. Validated against Deriv's list at startup.
+    DERIV_MULTIPLIER: float = float(os.getenv("DERIV_MULTIPLIER", "100"))
+    # Headroom required between the planned stop and liquidation
+    MULTIPLIER_STOP_SAFETY: float = float(os.getenv("MULTIPLIER_STOP_SAFETY", "1.25"))
+    # Close forex positions this many minutes before Friday's close. A stop is a
+    # dollar limit, not a guaranteed price, so a weekend gap can pass straight
+    # through it. Set to 0 to carry positions over the weekend deliberately.
+    FOREX_WEEKEND_FLATTEN_MINUTES: int = int(
+        os.getenv("FOREX_WEEKEND_FLATTEN_MINUTES", "20")
+    )
+    # Ask the venue where a dollar stop actually fires and correct for the cost
+    # baked into it, so barriers land on the chart levels instead of ~18% inside
+    # them. Costs two extra proposals per symbol, cached per stake.
+    CALIBRATE_CONTRACT_BARRIERS: bool = (
+        os.getenv("CALIBRATE_CONTRACT_BARRIERS", "true").lower() == "true"
+    )
+    # Refuse a trade whose chart stop cannot be encoded, instead of shipping a tighter one
+    REJECT_UNENCODABLE_STOP: bool = (
+        os.getenv("REJECT_UNENCODABLE_STOP", "true").lower() == "true"
+    )
+
+    # Entry patterns allowed to fire. Breakouts are excluded by default: every
+    # live fill used one and they lost on their own exits. Add "break_of_structure"
+    # / "break_prev" only after replay measures them.
+    PRICE_ACTION_PATTERNS: str = os.getenv("PRICE_ACTION_PATTERNS", "pin,engulfing")
+    BIAS_CONFIRM_TYPES: str = os.getenv("BIAS_CONFIRM_TYPES", "pin,engulfing")
 
     # Analysis engine (ATAE) — optional when NUMBER_ENGINE_EXECUTION is on
     ANALYSIS_REQUIRE_PREFLIGHT: bool = os.getenv("ANALYSIS_REQUIRE_PREFLIGHT", "false").lower() == "true"
@@ -53,10 +82,14 @@ class Settings(BaseSettings):
     TRADING_MODE: str = os.getenv("TRADING_MODE", "log_only")
 
     # Pairs — Deriv symbols
-    # frx* = forex (Mon–Fri only); R_* / 1HZ* = synthetic volatility (24/7)
+    # frx* = forex (closed Fri 20:55 to Sun 21:05 UTC); R_* / 1HZ* = synthetic (24/7)
+    # Majors only: their daily ATR fits inside the contract room at x100. Gold
+    # (2.2% ATR) and the synthetics (4% ATR) do not, so a stop set from the chart
+    # cannot be encoded on them. Re-check with scripts/instrument_fit.py before
+    # adding a symbol.
     TRADING_PAIRS: str = os.getenv(
         "TRADING_PAIRS",
-        "R_10,R_25,R_50,R_75,R_100",
+        "frxEURUSD,frxGBPUSD,frxUSDJPY,frxAUDUSD,frxUSDCAD",
     )
     CANDLE_TIMEFRAME_MINUTES: int = int(os.getenv("CANDLE_TIMEFRAME_MINUTES", "5"))
     # >=288 for 24h regime; >=360 for 30×1h; 400 clears 1h confirm with headroom
@@ -101,7 +134,11 @@ class Settings(BaseSettings):
         os.getenv("STRATEGY_CONFIDENCE_THRESHOLD", "94")
     )
     # Comma list; empty = all pattern strategies. Example: trend_following
-    STRATEGY_ALLOWLIST: str = os.getenv("STRATEGY_ALLOWLIST", "")
+    STRATEGY_ALLOWLIST: str = os.getenv("STRATEGY_ALLOWLIST", "trend_following")
+    # Strategies barred regardless of allowlist or regime routing. range_trading
+    # went 0/12 and momentum 0/5 in demo, neither ever winning on its own exit.
+    # Remove an id only after replay shows positive expectancy for it.
+    STRATEGY_DENYLIST: str = os.getenv("STRATEGY_DENYLIST", "range_trading,momentum")
     ATR_SL_MULTIPLIER: float = float(os.getenv("ATR_SL_MULTIPLIER", "1.5"))
     DEFAULT_RR_RATIO: float = float(os.getenv("DEFAULT_RR_RATIO", "2.0"))
 
@@ -113,10 +150,11 @@ class Settings(BaseSettings):
         os.getenv("DAILY_DRAWDOWN_LIMIT_PERCENT", "4.0")
     )
     MAX_DAILY_PROFIT_PERCENT: float = float(os.getenv("MAX_DAILY_PROFIT_PERCENT", "8.0"))
-    # 0 = unlimited (demo data collection)
-    MAX_TRADES_PER_DAY: int = int(os.getenv("MAX_TRADES_PER_DAY", "0"))
-    # Cap concurrent open contracts (0 = unlimited; any setup that passes rules may open)
-    MAX_OPEN_POSITIONS: int = int(os.getenv("MAX_OPEN_POSITIONS", "0"))
+    # 0 = unlimited. Capped because 22 fills once landed in a single 8h window and
+    # one operator flatten then decided the month's result.
+    MAX_TRADES_PER_DAY: int = int(os.getenv("MAX_TRADES_PER_DAY", "4"))
+    # One position at a time: the thesis is a single 6h swing, not a basket.
+    MAX_OPEN_POSITIONS: int = int(os.getenv("MAX_OPEN_POSITIONS", "1"))
     DEFAULT_SL_PIPS: int = int(os.getenv("DEFAULT_SL_PIPS", "15"))
     DEFAULT_TP_PIPS: int = int(os.getenv("DEFAULT_TP_PIPS", "30"))
     TRAILING_STOP_ENABLED: bool = os.getenv("TRAILING_STOP_ENABLED", "false").lower() == "true"

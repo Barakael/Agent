@@ -1,2 +1,5 @@
 data/
 *.db
+
+# Generated trend charts and briefs
+reports/*.png

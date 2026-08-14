@@ -67,6 +67,9 @@ class StrategyEvaluation:
     suggested_sl: Optional[float] = None
     suggested_tp: Optional[float] = None
     sl_tp_method: str = "atr"
+    # Entry trigger that produced this evaluation, so a pattern can be required
+    # or excluded independently of the confidence score.
+    pattern: Optional[str] = None
 
     @property
     def is_trade(self) -> bool:

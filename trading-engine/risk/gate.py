@@ -18,7 +18,15 @@ PIP_SIZE = {
     "frxEURUSD": 0.0001,
     "frxGBPUSD": 0.0001,
     "frxAUDUSD": 0.0001,
+    "frxUSDCAD": 0.0001,
+    "frxUSDCHF": 0.0001,
+    "frxNZDUSD": 0.0001,
     "frxUSDJPY": 0.01,
+    "frxEURJPY": 0.01,
+    "frxGBPJPY": 0.01,
+    # Metals quote to fewer decimals than currency pairs
+    "frxXAUUSD": 0.01,
+    "frxXAGUSD": 0.001,
     # Synthetic Volatility Indices
     "R_10": 0.001,
     "R_25": 0.001,
@@ -28,10 +36,36 @@ PIP_SIZE = {
 }
 
 
+def pip_size(symbol: str) -> float:
+    """Point size for a symbol.
+
+    Falls back to the quote-currency convention rather than a flat default,
+    because assuming 0.0001 on a JPY pair understates distances a hundredfold
+    and does so silently.
+    """
+    if symbol in PIP_SIZE:
+        return PIP_SIZE[symbol]
+    s = (symbol or "").upper()
+    if s.startswith("FRX"):
+        if s.endswith("JPY"):
+            return 0.01
+        if "XAU" in s:
+            return 0.01
+        if "XAG" in s:
+            return 0.001
+        return 0.0001
+    return 0.0001
+
+
 def is_synthetic_symbol(symbol: str) -> bool:
     """Deriv synthetics ignore macro news and trade 24/7."""
     s = (symbol or "").upper()
     return s.startswith("R_") or s.startswith("1HZ")
+
+
+def is_forex_symbol(symbol: str) -> bool:
+    """Deriv forex and metals: real market prices, and closed at weekends."""
+    return (symbol or "").upper().startswith("FRX")
 
 
 class RiskDecision(str, Enum):
@@ -137,7 +171,7 @@ class RiskGate:
         return self._trades_today
 
     def _pip_size(self, symbol: str) -> float:
-        return PIP_SIZE.get(symbol, 0.0001)
+        return pip_size(symbol)
 
     def calculate_stake(self, balance: float, sl_pips: int, symbol: str) -> float:
         """Demo: fixed DEMO_FIXED_STAKE_USD. Live: % of balance (not FX lot sizing)."""

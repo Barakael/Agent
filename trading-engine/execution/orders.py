@@ -3,29 +3,96 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Optional
 
 from config import settings
 from data.deriv_ws import DerivWebSocketClient
+from execution.multiplier import (
+    ContractCalibration,
+    contract_room_pct,
+    price_distance_pct,
+    stop_fits,
+    usd_from_pct,
+)
 from risk.gate import RiskCheckResult
 from signals.engine import SignalDirection, TradeSignal
 
 logger = logging.getLogger(__name__)
 
 
-def usd_limit_from_risk(risk: RiskCheckResult) -> tuple[float, float]:
-    """
-    Deriv MULTUP/MULTDOWN limit_order uses USD P/L amounts, not chart prices.
+class UnencodableStop(RuntimeError):
+    """Raised when the chart stop cannot fit inside the contract's room."""
 
-    Journal / RiskGate keep price_sl / price_tp (ATR or fixed pips).
-    Contract risk is enforced in dollars: SL ≈ stake×0.8, TP ≈ stake×(tp_pips/sl_pips).
+
+@dataclass(frozen=True)
+class ContractBarriers:
+    """Chart distances expressed as contract dollars and percentages."""
+
+    usd_sl: float
+    usd_tp: float
+    sl_pct: float
+    tp_pct: float
+    multiplier: float
+    encodable: bool
+    # False means the dollar limits came from plain arithmetic, so both barriers
+    # will sit inside the chart levels by roughly the contract's cost.
+    calibrated: bool = False
+
+    @property
+    def room_pct(self) -> float:
+        return contract_room_pct(self.multiplier)
+
+
+def barriers_from_risk(
+    risk: RiskCheckResult,
+    entry: float,
+    *,
+    multiplier: float | None = None,
+    calibration: ContractCalibration | None = None,
+) -> ContractBarriers:
+    """Map the plan's stop and target prices onto multiplier dollar limits.
+
+    Deriv's ``limit_order`` takes USD amounts, and those amounts are net of the
+    commission and spread already inside the contract. Converting a chart
+    distance with plain ``stake x multiplier x distance / entry`` therefore puts
+    the stop nearer than the chart asked and the target further away — measured
+    live at 18% and 17% of the intended distances. When a ``calibration`` fitted
+    from the venue's own quoted trigger prices is supplied, the cost is added
+    back so both barriers fire where the thesis intended.
     """
-    sl_usd = round(float(risk.stake) * 0.8, 2)
-    tp_usd = round(
-        float(risk.stake) * (risk.take_profit_pips / max(1, risk.stop_loss_pips)),
-        2,
+    mult = float(multiplier if multiplier is not None else settings.DERIV_MULTIPLIER)
+    stake = float(risk.stake)
+    sl_pct = price_distance_pct(entry, risk.stop_loss_price)
+    tp_pct = price_distance_pct(entry, risk.take_profit_price)
+
+    if calibration is not None:
+        usd_sl = calibration.usd_for_stop(sl_pct)
+        usd_tp = calibration.usd_for_target(tp_pct)
+    else:
+        usd_sl = usd_from_pct(stake, mult, sl_pct)
+        usd_tp = usd_from_pct(stake, mult, tp_pct)
+
+    return ContractBarriers(
+        usd_sl=round(usd_sl, 2),
+        usd_tp=round(usd_tp, 2),
+        sl_pct=sl_pct,
+        tp_pct=tp_pct,
+        multiplier=mult,
+        encodable=stop_fits(
+            mult, sl_pct, safety=float(settings.MULTIPLIER_STOP_SAFETY)
+        ),
+        calibrated=calibration is not None,
     )
-    return sl_usd, tp_usd
+
+
+def usd_limit_from_risk(
+    risk: RiskCheckResult, entry: float | None = None
+) -> tuple[float, float]:
+    """Contract stop and target in USD for the plan's chart levels."""
+    price = entry if entry is not None else risk.stop_loss_price
+    barriers = barriers_from_risk(risk, float(price))
+    return barriers.usd_sl, barriers.usd_tp
 
 
 class OrderExecutor:
@@ -34,17 +101,54 @@ class OrderExecutor:
     def __init__(self, client: DerivWebSocketClient) -> None:
         self.client = client
         self.mode = settings.TRADING_MODE
+        self._calibrations: dict[tuple[str, float, float], ContractCalibration] = {}
 
     def _contract_type(self, direction: SignalDirection) -> str:
         # Multipliers can be sold early; binary CALL/PUT often cannot.
         return "MULTUP" if direction == SignalDirection.BUY else "MULTDOWN"
+
+    async def _calibration(
+        self, symbol: str, stake: float, multiplier: float
+    ) -> Optional[ContractCalibration]:
+        """Cached per symbol, stake and multiplier — the fit depends on all three."""
+        if not settings.CALIBRATE_CONTRACT_BARRIERS:
+            return None
+        key = (symbol, round(float(stake), 2), float(multiplier))
+        if key not in self._calibrations:
+            try:
+                fitted = await self.client.calibrate_contract(symbol, stake, multiplier)
+            except Exception:
+                logger.warning("Barrier calibration failed for %s", symbol, exc_info=True)
+                return None
+            if fitted is None:
+                return None
+            self._calibrations[key] = fitted
+        return self._calibrations[key]
 
     async def execute_signal(
         self,
         signal: TradeSignal,
         risk: RiskCheckResult,
     ) -> Optional[dict]:
-        usd_sl, usd_tp = usd_limit_from_risk(risk)
+        mult = float(settings.DERIV_MULTIPLIER)
+        calibration = None
+        if self.mode != "log_only":
+            calibration = await self._calibration(signal.symbol, risk.stake, mult)
+        barriers = barriers_from_risk(
+            risk, float(signal.price), calibration=calibration
+        )
+        usd_sl, usd_tp = barriers.usd_sl, barriers.usd_tp
+
+        if not barriers.encodable:
+            detail = (
+                f"{signal.symbol} stop needs {barriers.sl_pct * 100:.2f}% but multiplier "
+                f"{barriers.multiplier:g} liquidates at {barriers.room_pct * 100:.2f}%"
+            )
+            if settings.REJECT_UNENCODABLE_STOP:
+                logger.warning("Rejecting signal — %s", detail)
+                raise UnencodableStop(detail)
+            logger.warning("Stop exceeds contract room — %s", detail)
+
         if self.mode == "log_only":
             logger.info(
                 "LOG_ONLY: would %s %s stake=%.2f price_sl=%.5f price_tp=%.5f "
@@ -94,7 +198,9 @@ class OrderExecutor:
             duration_unit="m",
             stop_loss=usd_sl,
             take_profit=usd_tp,
-            multiplier=settings.DERIV_MULTIPLIER,
+            multiplier=barriers.multiplier,
+            stop_loss_pct=barriers.sl_pct,
+            take_profit_pct=barriers.tp_pct,
         )
         if result is not None:
             result["stop_loss_usd"] = usd_sl
@@ -119,6 +225,7 @@ class OrderExecutor:
         stake: float,
         stop_loss: float,
         take_profit: float,
+        entry: Optional[float] = None,
     ) -> dict:
         if self.mode == "log_only":
             return {
@@ -132,8 +239,29 @@ class OrderExecutor:
 
         contract_type = "MULTUP" if direction.lower() == "buy" else "MULTDOWN"
         duration = settings.CANDLE_TIMEFRAME_MINUTES * 3
-        sl_usd = round(float(stake) * 0.8, 2)
-        tp_usd = round(float(stake) * 2.0, 2)
+        mult = float(settings.DERIV_MULTIPLIER)
+        sl_pct = tp_pct = None
+        if entry:
+            sl_pct = price_distance_pct(entry, stop_loss)
+            tp_pct = price_distance_pct(entry, take_profit)
+            sl_usd = round(usd_from_pct(stake, mult, sl_pct), 2)
+            tp_usd = round(usd_from_pct(stake, mult, tp_pct), 2)
+            if not stop_fits(mult, sl_pct, safety=float(settings.MULTIPLIER_STOP_SAFETY)):
+                detail = (
+                    f"{symbol} manual stop needs {sl_pct * 100:.2f}% but multiplier "
+                    f"{mult:g} liquidates at {contract_room_pct(mult) * 100:.2f}%"
+                )
+                if settings.REJECT_UNENCODABLE_STOP:
+                    raise UnencodableStop(detail)
+                logger.warning("Manual stop exceeds contract room — %s", detail)
+        else:
+            logger.warning(
+                "Manual order for %s has no entry price — falling back to fixed "
+                "dollar limits, which will not match the requested chart levels",
+                symbol,
+            )
+            sl_usd = round(float(stake) * 0.8, 2)
+            tp_usd = round(float(stake) * 2.0, 2)
         logger.info(
             "Manual open %s %s stake=%.2f price_sl=%.5f price_tp=%.5f usd_sl=%.2f usd_tp=%.2f",
             symbol,
@@ -152,5 +280,7 @@ class OrderExecutor:
             duration_unit="m",
             stop_loss=sl_usd,
             take_profit=tp_usd,
-            multiplier=settings.DERIV_MULTIPLIER,
+            multiplier=mult,
+            stop_loss_pct=sl_pct,
+            take_profit_pct=tp_pct,
         )

@@ -137,7 +137,33 @@ def test_soft_gate_buy_accepts_up_when_stance_ok():
     assert "projection_aligned" in passed
 
 
-def test_soft_gate_stand_aside_blocks():
+def test_soft_gate_stand_aside_is_neutral():
+    up = HorizonProjection(
+        direction="up",
+        lookback_hours=8,
+        horizon_hours=6,
+        entry_now=100.0,
+        atr=1.0,
+        range_high=102.0,
+        range_low=98.0,
+        ema21=99.5,
+        bull=102.0,
+        base=101.0,
+        bear=99.0,
+        extent_pts=1.0,
+        extent_pct=0.01,
+        invalidation=98.0,
+    )
+    ok, passed, failed = projection_agrees_with_bias(
+        "BUY_ONLY", up, stance_8h="STAND_ASIDE"
+    )
+    assert ok is True
+    assert failed == []
+    assert "projection_aligned" in passed
+    assert "stance_8h:STAND_ASIDE" in passed
+
+
+def test_soft_gate_opposing_stance_blocks():
     up = HorizonProjection(
         direction="up",
         lookback_hours=8,
@@ -155,9 +181,10 @@ def test_soft_gate_stand_aside_blocks():
         invalidation=98.0,
     )
     ok, _, failed = projection_agrees_with_bias(
-        "BUY_ONLY", up, stance_8h="STAND_ASIDE"
+        "BUY_ONLY", up, stance_8h="FAVOR_SELL"
     )
     assert ok is False
+    assert "stance_opposes_buy" in failed
     assert "projection_not_aligned" in failed
 
 

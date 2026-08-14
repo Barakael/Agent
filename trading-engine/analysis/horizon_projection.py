@@ -242,21 +242,20 @@ def projection_agrees_with_bias(
         failed.append("projection_not_aligned")
         return False, passed, failed
 
-    if stance_8h == "STAND_ASIDE":
-        failed.append("projection_not_aligned")
-        failed.append("stance_8h_stand_aside")
-        return False, passed, failed
-
+    # STAND_ASIDE is neutral — do not veto when projection already agrees with bias.
+    # Only a directional opposing stance blocks.
     if bias_direction == "BUY_ONLY":
         if projection.direction != "up":
             failed.append("projection_not_aligned")
         if stance_8h == "FAVOR_SELL":
             failed.append("stance_opposes_buy")
+            failed.append("projection_not_aligned")
     elif bias_direction == "SELL_ONLY":
         if projection.direction != "down":
             failed.append("projection_not_aligned")
         if stance_8h == "FAVOR_BUY":
             failed.append("stance_opposes_sell")
+            failed.append("projection_not_aligned")
     else:
         failed.append("projection_not_aligned")
 

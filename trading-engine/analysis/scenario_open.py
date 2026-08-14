@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from config import settings
-from risk.gate import PIP_SIZE
+from risk.gate import pip_size as _symbol_pip_size
 from signals.engine import SignalDirection, TradeSignal
 
 
@@ -22,7 +22,7 @@ class OpenScenarioResult:
 
 
 def _pip_size(symbol: str) -> float:
-    return PIP_SIZE.get(symbol, 0.0001)
+    return _symbol_pip_size(symbol)
 
 
 def simulate_sl_tp_window(

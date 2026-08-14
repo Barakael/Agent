@@ -36,19 +36,27 @@ from config import settings
 from data.calendar import EconomicCalendar
 from data.candle_aggregator import CandleAggregator
 from data.deriv_ws import DerivWebSocketClient
-from execution.orders import OrderExecutor
+from execution.multiplier import contract_room_pct, validate_multiplier
+from execution.orders import OrderExecutor, UnencodableStop
 from execution.positions import PositionManager
 from journal.writer import JournalWriter
 from number_engine import NumberEngine
 from plan.store import plan_store
 from plan.schema import DailyPlan
 from risk.gate import RiskDecision, RiskGate, is_synthetic_symbol
+from risk.market_hours import (
+    is_market_open,
+    market_status,
+    seconds_until_open,
+    should_flatten_for_weekend,
+)
 from risk.session import SessionManager
 from signals.engine import SignalDirection, SignalEngine
 from strategies import (
     PATTERN_STRATEGY_IDS,
     allowlist_strategy_ids,
     apply_strategy_allowlist,
+    denylist_strategy_ids,
     evaluate_strategies_detailed,
 )
 from strategies.base import StrategyContext, make_signal
@@ -94,6 +102,7 @@ class TradingBot:
         self._mid_review: dict[str, HorizonReview] = {}
         self._8h_review: dict[str, HorizonReview] = {}
         self._projection: dict[str, HorizonProjection] = {}
+        self._allowed_multipliers: dict[str, list[float]] = {}
         self.plan_store = plan_store
 
     def get_active_plan(self) -> Optional[DailyPlan]:
@@ -942,6 +951,24 @@ class TradingBot:
 
     async def _risk_and_execute(self, symbol: str, signal, df, plan) -> bool:
         """Shared RiskGate → execute path. Returns True if a trade was opened."""
+        # Forex shuts from late Friday to late Sunday. The last close before the
+        # break is a stale price to act on, so skip rather than journal a fill
+        # that could not have happened.
+        if not is_market_open(symbol):
+            skip = f"market_closed (reopens in {seconds_until_open(symbol)}s)"
+        elif settings.FOREX_WEEKEND_FLATTEN_MINUTES > 0 and should_flatten_for_weekend(
+            symbol
+        ):
+            skip = "weekend_flatten_window"
+        else:
+            skip = ""
+        if skip:
+            cached = self._last_analysis.get(symbol)
+            if cached:
+                cached["skip_reason"] = skip
+            logger.info("Skip open %s: %s", symbol, skip)
+            return False
+
         # Cap concurrent opens (no stacking)
         max_open = int(getattr(settings, "MAX_OPEN_POSITIONS", 1) or 0)
         if max_open > 0:
@@ -1027,6 +1054,15 @@ class TradingBot:
 
         try:
             order = await self.executor.execute_signal(signal, risk_result)
+        except UnencodableStop as exc:
+            # The chart stop does not fit the contract; skip rather than trade a
+            # tighter stop than the thesis called for.
+            logger.warning("Signal skipped for %s: %s", symbol, exc)
+            self.journal.log_signal_rejected(signal, f"unencodable_stop: {exc}"[:500])
+            cached = self._last_analysis.get(symbol)
+            if cached:
+                cached["skip_reason"] = f"unencodable_stop: {exc}"[:200]
+            return False
         except Exception as exc:
             msg = f"execution_failed: {exc}"
             logger.exception("Order execution failed %s", symbol)
@@ -1070,6 +1106,13 @@ class TradingBot:
                 await self._close_all_positions(force=True, skip_swing=True)
                 metrics = compute_metrics()
                 await self.telegram.daily_summary(self.risk.daily_pnl, metrics)
+            elif settings.FOREX_WEEKEND_FLATTEN_MINUTES > 0 and any(
+                should_flatten_for_weekend(s) for s in self.active_pairs
+            ):
+                # Swing positions are included: a weekend gap ignores the stop
+                # regardless of how the position was labelled.
+                logger.warning("Forex close approaching — flattening before the weekend")
+                await self._close_all_positions(force=True, skip_swing=False)
             await asyncio.sleep(60)
 
     async def _ensure_symbol_feed(self, symbol: str) -> bool:
@@ -1125,7 +1168,9 @@ class TradingBot:
                         self._account_probe_error = None
                 if self.client._socket_alive():
                     missing = [
-                        s for s in self.active_pairs if s not in self._subscribed_symbols
+                        s
+                        for s in self.active_pairs
+                        if s not in self._subscribed_symbols and is_market_open(s)
                     ]
                     for symbol in missing:
                         await self._ensure_symbol_feed(symbol)
@@ -1216,6 +1261,9 @@ class TradingBot:
             self._account_probe_error = "DERIV_API_TOKEN not set"
             logger.warning("No DERIV_API_TOKEN — running in offline/simulated mode")
 
+        if deriv_connected:
+            await self._verify_multiplier()
+
         await self.calendar.refresh()
         if settings.NUMBER_ENGINE_EXECUTION:
             # Arm immediately so UI/status are not blocked while preflight backtests run
@@ -1276,6 +1324,37 @@ class TradingBot:
             sorted(self._subscribed_symbols),
         )
 
+    async def _verify_multiplier(self) -> None:
+        """Confirm Deriv offers the configured multiplier before trading it.
+
+        A rejected multiplier is silently substituted at proposal time, which
+        would change the dollar value of every stop, so the mismatch is surfaced
+        at startup instead.
+        """
+        configured = float(settings.DERIV_MULTIPLIER)
+        room_pct = contract_room_pct(configured)
+        for symbol in self.active_pairs:
+            if not is_synthetic_symbol(symbol):
+                continue
+            try:
+                allowed = await self.client.get_allowed_multipliers(symbol)
+            except Exception:
+                logger.warning("Could not read multipliers for %s", symbol, exc_info=True)
+                continue
+            ok, detail = validate_multiplier(configured, allowed)
+            self._allowed_multipliers[symbol] = allowed
+            if ok:
+                logger.info(
+                    "Multiplier %g valid for %s — stop room %.2f%% (allowed %s)",
+                    configured,
+                    symbol,
+                    room_pct * 100,
+                    ", ".join(f"{m:g}" for m in allowed) or "unreported",
+                )
+            else:
+                logger.error("Multiplier check failed for %s: %s", symbol, detail)
+                self._account_probe_error = f"{symbol}: {detail}"
+
     @staticmethod
     def _format_deriv_error(exc: Exception) -> str:
         msg = str(exc)
@@ -1317,8 +1396,14 @@ class TradingBot:
             "mode": settings.TRADING_MODE,
             "pairs": self.active_pairs,
             "strategy_allowlist": allowlist_strategy_ids(),
+            "strategy_denylist": sorted(denylist_strategy_ids()),
             "max_open_positions": int(getattr(settings, "MAX_OPEN_POSITIONS", 1) or 0),
             "max_trades_per_day": int(getattr(settings, "MAX_TRADES_PER_DAY", 0) or 0),
+            "multiplier": float(settings.DERIV_MULTIPLIER),
+            "multiplier_room_pct": round(
+                contract_room_pct(settings.DERIV_MULTIPLIER) * 100, 3
+            ),
+            "allowed_multipliers": self._allowed_multipliers,
             "feed_connected": self.client._socket_alive(),
             "daily_pnl": self.risk.daily_pnl,
             "kill_switch_active": self.risk.kill_switch_active,
@@ -1335,6 +1420,7 @@ class TradingBot:
             "preflight": preflight,
             "sources": self.analysis.source_status(),
             "session": self.session.session_status(),
+            "markets": market_status(self.active_pairs),
             "last_heartbeat": bot_state.get("last_heartbeat"),
             "active_plan": plan.to_dict() if plan else None,
             "stored_plan": stored.to_dict() if stored else None,

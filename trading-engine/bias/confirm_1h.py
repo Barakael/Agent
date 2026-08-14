@@ -14,6 +14,16 @@ from indicators.ema import compute_ema
 from indicators.rsi import compute_rsi
 from indicators.structure import detect_engulfing, detect_pin_bar
 
+REJECTION_CONFIRMATIONS = frozenset({"pin", "engulfing"})
+
+
+def allowed_confirmations() -> frozenset[str]:
+    """Confirmation families allowed to trigger entry, from BIAS_CONFIRM_TYPES."""
+    raw = str(settings.BIAS_CONFIRM_TYPES or "").strip()
+    if not raw:
+        return REJECTION_CONFIRMATIONS
+    return frozenset(p.strip() for p in raw.split(",") if p.strip())
+
 
 @dataclass
 class ConfirmResult:
@@ -135,24 +145,30 @@ def confirm_1h_entry(
     eng = detect_engulfing(prev_o, prev_c, cur_o, cur_c)
     break_prev = (want_buy and cur_c > prev_h) or ((not want_buy) and cur_c < prev_l)
 
+    allowed = allowed_confirmations()
     confirm_type = ""
+    confirm_family = ""
     if want_buy:
         if pin == "bullish_pin":
-            confirm_type = "bullish_pin"
+            confirm_type, confirm_family = "bullish_pin", "pin"
         elif eng == "bullish_engulfing":
-            confirm_type = "bullish_engulfing"
+            confirm_type, confirm_family = "bullish_engulfing", "engulfing"
         elif break_prev:
-            confirm_type = "break_prev_high"
+            confirm_type, confirm_family = "break_prev_high", "break_prev"
     else:
         if pin == "bearish_pin":
-            confirm_type = "bearish_pin"
+            confirm_type, confirm_family = "bearish_pin", "pin"
         elif eng == "bearish_engulfing":
-            confirm_type = "bearish_engulfing"
+            confirm_type, confirm_family = "bearish_engulfing", "engulfing"
         elif break_prev:
-            confirm_type = "break_prev_low"
+            confirm_type, confirm_family = "break_prev_low", "break_prev"
 
     if not confirm_type:
         failed.append("no_rejection_or_break")
+    elif confirm_family not in allowed:
+        # A breakout used to stand in whenever no rejection appeared, which is how
+        # every live fill ended up entering into a snap-back.
+        failed.append(f"confirm_not_enabled:{confirm_family}")
     else:
         passed.append(f"confirm:{confirm_type}")
 

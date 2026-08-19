@@ -148,6 +148,13 @@ class OrderExecutor:
 
         if not barriers.encodable:
             detail = (
+                f"{signal.symbol} stop needs {barriers.sl_pct * 100:.2f}% but multiplier "
+                f"{barriers.multiplier:g} liquidates at {barriers.room_pct * 100:.2f}%"
+            )
+            if settings.REJECT_UNENCODABLE_STOP:
+                logger.warning("Rejecting signal — %s", detail)
+                raise UnencodableStop(detail)
+            logger.warning("Stop exceeds contract room — %s", detail)
 
         if usd_sl > 0 and usd_tp < MIN_DOLLAR_RR * usd_sl:
             detail = (
@@ -156,13 +163,6 @@ class OrderExecutor:
             )
             logger.warning("Rejecting signal — %s", detail)
             raise InvertedRR(detail)
-                f"{signal.symbol} stop needs {barriers.sl_pct * 100:.2f}% but multiplier "
-                f"{barriers.multiplier:g} liquidates at {barriers.room_pct * 100:.2f}%"
-            )
-            if settings.REJECT_UNENCODABLE_STOP:
-                logger.warning("Rejecting signal — %s", detail)
-                raise UnencodableStop(detail)
-            logger.warning("Stop exceeds contract room — %s", detail)
 
         if self.mode == "log_only":
             logger.info(

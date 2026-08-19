@@ -92,6 +92,9 @@ class Strategy(Protocol):
         ...
 
 
+MIN_RR = 1.5  # never ship a target closer than 1.5x the stop
+
+
 def atr_sl_tp(
     snapshot: MarketSnapshot,
     direction: SignalDirection,

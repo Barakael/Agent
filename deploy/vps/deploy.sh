@@ -19,7 +19,17 @@ VITE_API_URL="$API_URL" npm run build
 #     re-downloading 7,000 files with a cold cache, and a broken backend if
 #     composer failed
 #   * composer's own cache and HOME dirs at the app root
+#   * data/active_plan.json, which is live state here and would be overwritten
+#     with whatever stale plan happens to sit on the developer's machine
+echo "==> Rsync to $HOST:$REMOTE"
+rsync -az --delete \
+  --exclude '.git' \
+  --exclude 'node_modules' \
+  --exclude '.venv' \
+  --exclude 'frontend/node_modules' \
+  --exclude '**/__pycache__' \
   --exclude '**/.pytest_cache' \
+  --exclude 'trading-engine/trading_journal.db' \
   --exclude 'trading-engine/reports/' \
   --exclude 'trading-engine/backtest/history_cache/' \
   --exclude 'trading-engine/.cache/' \
@@ -30,16 +40,7 @@ VITE_API_URL="$API_URL" npm run build
   --exclude '/.cache/' \
   --exclude '/.config/' \
   --exclude '/.local/' \
-#   * data/active_plan.json, which is live state here and would be overwritten
-#     with whatever stale plan happens to sit on the developer's machine
-echo "==> Rsync to $HOST:$REMOTE"
-ssh "$HOST" "APP_DIR='$REMOTE' bash -s" <<'REMOTE_SCRIPT'
-  --exclude '.git' \
-cd "$APP_DIR"
-  --exclude '.venv' \
-mkdir -p "$APP_DIR/trading-engine/.cache/matplotlib" "$APP_DIR/trading-engine/reports"
-chown -R wayda:wayda "$APP_DIR" || true
-  --exclude 'trading-engine/trading_journal.db' \
+  --exclude 'backend/database/database.sqlite' \
   --exclude 'backend/database/database.sqlite-*' \
   --exclude 'backend/storage/logs/*' \
   --exclude 'backend/storage/framework/cache/*' \
@@ -48,6 +49,24 @@ chown -R wayda:wayda "$APP_DIR" || true
   --exclude 'backend/.env' \
   --exclude 'trading-engine/.env' \
   --exclude 'ai-agent/.env' \
+  --exclude 'frontend/.env' \
+  "$ROOT/" "$HOST:$REMOTE/"
+
+echo "==> Remote install / restart"
+ssh "$HOST" "APP_DIR='$REMOTE' bash -s" <<'REMOTE_SCRIPT'
+set -euo pipefail
+cd "$APP_DIR"
+
+mkdir -p "$APP_DIR/trading-engine/.cache/matplotlib" "$APP_DIR/trading-engine/reports"
+chown -R wayda:wayda "$APP_DIR" || true
+
+if [[ -f backend/composer.json ]]; then
+  cd backend
+  sudo -u wayda composer install --no-dev --optimize-autoloader 2>/dev/null || composer install --no-dev --optimize-autoloader
+  sudo -u wayda php artisan config:clear || true
+  cd ..
+fi
+
 for svc in trading-engine ai-agent; do
   if [[ ! -x "$svc/.venv/bin/python" ]]; then
     echo "--> creating $svc venv"
@@ -62,7 +81,7 @@ ENV_FILE=trading-engine/.env
 if [[ -f "$ENV_FILE" ]]; then
   pairs=$(grep -E '^TRADING_PAIRS=' "$ENV_FILE" | tail -1 | cut -d= -f2- || true)
   mult=$(grep -E '^DERIV_MULTIPLIER=' "$ENV_FILE" | tail -1 | cut -d= -f2- || true)
-REMOTE_SCRIPT
+  if [[ "$pairs" == *R_* || "$pairs" == *1HZ* ]]; then
     echo
     echo "WARNING: $ENV_FILE still selects synthetic symbols: $pairs"
     echo "         Set TRADING_PAIRS=frxEURUSD,frxGBPUSD,frxUSDJPY,frxAUDUSD,frxUSDCAD"
@@ -74,31 +93,12 @@ REMOTE_SCRIPT
   fi
 else
   echo "WARNING: $ENV_FILE is missing; the trading engine will not start."
-# Frontend dist already synced
-chown -R wayda:wayda $REMOTE || true
-
-# Backend deps
-if [[ -f backend/composer.json ]]; then
-  cd backend
-  sudo -u wayda composer install --no-dev --optimize-autoloader 2>/dev/null || composer install --no-dev --optimize-autoloader
-  sudo -u wayda php artisan config:clear || true
-  cd ..
-fi
-
-# Python venvs
-if [[ ! -x trading-engine/.venv/bin/uvicorn ]]; then
-  sudo -u wayda python3 -m venv trading-engine/.venv
-  sudo -u wayda trading-engine/.venv/bin/pip install -r trading-engine/requirements.txt
-fi
-if [[ ! -x ai-agent/.venv/bin/uvicorn ]]; then
-  sudo -u wayda python3 -m venv ai-agent/.venv
-  sudo -u wayda ai-agent/.venv/bin/pip install -r ai-agent/requirements.txt
 fi
 
 systemctl daemon-reload
 systemctl restart wayda-backend wayda-ai-agent wayda-trading-engine || true
 systemctl reload nginx || true
 echo "Deploy done. Check: systemctl status wayda-trading-engine"
-REMOTE
+REMOTE_SCRIPT
 
 echo "==> Done"

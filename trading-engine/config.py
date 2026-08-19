@@ -97,7 +97,10 @@ class Settings(BaseSettings):
 
     # Bias pipeline: 24h regime → 6h bias → 1h confirm; 5m is feed only
     BIAS_PIPELINE: bool = os.getenv("BIAS_PIPELINE", "true").lower() == "true"
-    BIAS_PIPELINE_SYMBOLS: str = os.getenv("BIAS_PIPELINE_SYMBOLS", "R_50")
+    BIAS_PIPELINE_SYMBOLS: str = os.getenv(
+        "BIAS_PIPELINE_SYMBOLS",
+        "frxEURUSD,frxGBPUSD,frxUSDJPY,frxAUDUSD,frxUSDCAD",
+    )
     BIAS_REGIME_HOURS: int = int(os.getenv("BIAS_REGIME_HOURS", "24"))
     BIAS_LOOKBACK_HOURS: int = int(os.getenv("BIAS_LOOKBACK_HOURS", "6"))
     BIAS_ENTRY_TF_MINUTES: int = int(os.getenv("BIAS_ENTRY_TF_MINUTES", "60"))

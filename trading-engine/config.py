@@ -95,7 +95,7 @@ class Settings(BaseSettings):
     # >=288 for 24h regime; >=360 for 30×1h; 400 clears 1h confirm with headroom
     CANDLE_BUFFER_SIZE: int = int(os.getenv("CANDLE_BUFFER_SIZE", "400"))
 
-    # Bias pipeline (R_50): 24h regime → 6h bias → 1h confirm; 5m is feed only
+    # Bias pipeline: 24h regime → 6h bias → 1h confirm; 5m is feed only
     BIAS_PIPELINE: bool = os.getenv("BIAS_PIPELINE", "true").lower() == "true"
     BIAS_PIPELINE_SYMBOLS: str = os.getenv("BIAS_PIPELINE_SYMBOLS", "R_50")
     BIAS_REGIME_HOURS: int = int(os.getenv("BIAS_REGIME_HOURS", "24"))

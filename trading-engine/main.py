@@ -346,7 +346,7 @@ async def close_all(auth: bool = Depends(validate_api_key)):
     if bot is None:
         raise HTTPException(status_code=503, detail="Bot not available")
     dfs = {s: bot.aggregator.get_dataframe(s) for s in settings.pairs_list}
-    results = await bot.positions.close_all(df_by_symbol=dfs)
+    results = await bot.positions.close_all(force=True, df_by_symbol=dfs)
     return {"status": "closed", "count": len(results)}
 
 

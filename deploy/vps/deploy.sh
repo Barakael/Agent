@@ -19,6 +19,7 @@ VITE_API_URL="$API_URL" npm run build
 #     re-downloading 7,000 files with a cold cache, and a broken backend if
 #     composer failed
 #   * composer's own cache and HOME dirs at the app root
+  --exclude '**/.pytest_cache' \
 #   * data/active_plan.json, which is live state here and would be overwritten
 #     with whatever stale plan happens to sit on the developer's machine
 echo "==> Rsync to $HOST:$REMOTE"

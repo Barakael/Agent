@@ -16,9 +16,9 @@ def bias_sl_tp(
     *,
     atr_mult: float | None = None,
     rr: float | None = None,
-    rr = max(rr if rr is not None else float(settings.DEFAULT_RR_RATIO), MIN_RR)
+) -> tuple[float, float, str]:
     atr_mult = atr_mult if atr_mult is not None else float(settings.BIAS_SL_ATR_MULT)
-    rr = rr if rr is not None else float(settings.DEFAULT_RR_RATIO)
+    rr = max(rr if rr is not None else float(settings.DEFAULT_RR_RATIO), MIN_RR)
     atr = max(float(bias.atr_6h or 0.0), 1e-8)
     method = "bias_6h_atr"
 
@@ -27,15 +27,15 @@ def bias_sl_tp(
         atr_sl = entry - atr_mult * atr
         sl = min(swing_sl, atr_sl) if swing_sl < entry else atr_sl
         if swing_sl < entry:
-        tp = max(entry + rr * risk, entry + MIN_RR * risk)
+            method = "bias_6h_swing"
         risk = max(entry - sl, 1e-8)
-        tp = entry + rr * risk
+        tp = max(entry + rr * risk, entry + MIN_RR * risk)
     else:
         swing_sl = float(bias.range_high) + 0.05 * atr
         atr_sl = entry + atr_mult * atr
         sl = max(swing_sl, atr_sl) if swing_sl > entry else atr_sl
         if swing_sl > entry:
-        tp = min(entry - rr * risk, entry - MIN_RR * risk)
+            method = "bias_6h_swing"
         risk = max(sl - entry, 1e-8)
-        tp = entry - rr * risk
+        tp = min(entry - rr * risk, entry - MIN_RR * risk)
     return sl, tp, method

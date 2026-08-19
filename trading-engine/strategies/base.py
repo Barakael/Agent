@@ -109,7 +109,7 @@ def atr_sl_tp(
 
     if direction == SignalDirection.BUY:
         structure_sl = snapshot.swing_low - 0.1 * atr
-        atr_sl = price - atr_mult * atr
+        risk = max(price - sl, 1e-8)
         sl = min(structure_sl, atr_sl) if structure_sl < price else atr_sl
         if structure_sl < price:
             method = "atr_swing"

@@ -98,7 +98,8 @@ MIN_RR = 1.5  # never ship a target closer than 1.5x the stop
 def atr_sl_tp(
     snapshot: MarketSnapshot,
     direction: SignalDirection,
-    atr_mult: float = 1.5,
+    """Structure-aware ATR stop and R:R take-profit. TP is always at least 1.5R."""
+    rr = max(rr, MIN_RR)
     rr: float = 2.0,
 ) -> tuple[float, float, str]:
     """Structure-aware ATR stop and R:R take-profit."""

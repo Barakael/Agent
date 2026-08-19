@@ -115,6 +115,9 @@ def atr_sl_tp(
         if snapshot.resistance > price and (snapshot.resistance - price) >= MIN_RR * risk:
         risk = price - sl
         tp = price + rr * risk
+        # Enforce minimum RR
+        if (tp - price) < MIN_RR * risk:
+            tp = price + MIN_RR * risk
         # Prefer resistance as TP if it offers at least 1.5R
         if snapshot.resistance > price and (snapshot.resistance - price) >= 1.5 * risk:
             tp = snapshot.resistance

@@ -121,7 +121,7 @@ def atr_sl_tp(
         # Prefer resistance as TP if it offers at least 1.5R
         if snapshot.resistance > price and (snapshot.resistance - price) >= 1.5 * risk:
             tp = snapshot.resistance
-            method = "atr_structure"
+        risk = max(sl - price, 1e-8)
     else:
         structure_sl = snapshot.swing_high + 0.1 * atr
         atr_sl = price + atr_mult * atr

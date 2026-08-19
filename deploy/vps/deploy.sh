@@ -48,14 +48,32 @@ chown -R wayda:wayda "$APP_DIR" || true
   --exclude 'backend/.env' \
   --exclude 'trading-engine/.env' \
   --exclude 'ai-agent/.env' \
-  --exclude 'frontend/.env' \
-  "$ROOT/" "$HOST:$REMOTE/"
+for svc in trading-engine ai-agent; do
+  if [[ ! -x "$svc/.venv/bin/python" ]]; then
+    echo "--> creating $svc venv"
+    sudo -u wayda python3 -m venv "$svc/.venv"
+  fi
+  echo "--> installing $svc requirements"
+  sudo -u wayda "$svc/.venv/bin/pip" install --disable-pip-version-check -q \
+    -r "$svc/requirements.txt"
+done
 
-echo "==> Remote install / restart"
-ssh "$HOST" bash -s <<REMOTE
-set -euo pipefail
-cd $REMOTE
-
+ENV_FILE=trading-engine/.env
+if [[ -f "$ENV_FILE" ]]; then
+  pairs=$(grep -E '^TRADING_PAIRS=' "$ENV_FILE" | tail -1 | cut -d= -f2- || true)
+  mult=$(grep -E '^DERIV_MULTIPLIER=' "$ENV_FILE" | tail -1 | cut -d= -f2- || true)
+  if [[ "$pairs" == *R_* || "$pairs" == *1HZ* ]]; then
+    echo
+    echo "WARNING: $ENV_FILE still selects synthetic symbols: $pairs"
+    echo "         Set TRADING_PAIRS=frxEURUSD,frxGBPUSD,frxUSDJPY,frxAUDUSD,frxUSDCAD"
+    echo
+  fi
+  if [[ -n "$mult" && "$mult" != "100" ]]; then
+    echo "WARNING: DERIV_MULTIPLIER=$mult — 100 is the only value that holds a one-ATR stop."
+    echo
+  fi
+else
+  echo "WARNING: $ENV_FILE is missing; the trading engine will not start."
 # Frontend dist already synced
 chown -R wayda:wayda $REMOTE || true
 

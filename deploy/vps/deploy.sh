@@ -33,7 +33,7 @@ VITE_API_URL="$API_URL" npm run build
 #   * data/active_plan.json, which is live state here and would be overwritten
 #     with whatever stale plan happens to sit on the developer's machine
 echo "==> Rsync to $HOST:$REMOTE"
-rsync -az --delete \
+ssh "$HOST" "APP_DIR='$REMOTE' bash -s" <<'REMOTE_SCRIPT'
   --exclude '.git' \
   --exclude 'node_modules' \
   --exclude '.venv' \

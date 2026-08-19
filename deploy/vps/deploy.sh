@@ -20,6 +20,16 @@ VITE_API_URL="$API_URL" npm run build
 #     composer failed
 #   * composer's own cache and HOME dirs at the app root
   --exclude '**/.pytest_cache' \
+  --exclude 'trading-engine/reports/' \
+  --exclude 'trading-engine/backtest/history_cache/' \
+  --exclude 'trading-engine/.cache/' \
+  --exclude 'local-runner/.logs/' \
+  --exclude 'trading-engine/data/active_plan.json*' \
+  --exclude 'backend/vendor/' \
+  --exclude 'backend/bootstrap/cache/*' \
+  --exclude '/.cache/' \
+  --exclude '/.config/' \
+  --exclude '/.local/' \
 #   * data/active_plan.json, which is live state here and would be overwritten
 #     with whatever stale plan happens to sit on the developer's machine
 echo "==> Rsync to $HOST:$REMOTE"

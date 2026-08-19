@@ -126,6 +126,9 @@ def atr_sl_tp(
         if snapshot.support < price and (price - snapshot.support) >= MIN_RR * risk:
         atr_sl = price + atr_mult * atr
         sl = max(structure_sl, atr_sl) if structure_sl > price else atr_sl
+        # Enforce minimum RR
+        if (price - tp) < MIN_RR * risk:
+            tp = price - MIN_RR * risk
         if structure_sl > price:
             method = "atr_swing"
         risk = sl - price

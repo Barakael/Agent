@@ -230,6 +230,14 @@ class RiskGate:
     ) -> RiskCheckResult:
         self._roll_day_if_needed()
 
+        # Forex-only: reject synthetics (R_*, 1HZ*) and any non-frx symbol.
+        symbol = getattr(signal, "symbol", "") or ""
+        if not symbol.lower().startswith("frx"):
+            return RiskCheckResult(
+                decision=RiskDecision.REJECTED,
+                reason=f"non_frx_symbol_rejected: {symbol}",
+            )
+
         if self._kill_switch_active:
             return RiskCheckResult(
                 decision=RiskDecision.REJECTED,

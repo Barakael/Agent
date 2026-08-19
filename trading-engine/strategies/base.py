@@ -98,44 +98,44 @@ MIN_RR = 1.5  # never ship a target closer than 1.5x the stop
 def atr_sl_tp(
     snapshot: MarketSnapshot,
     direction: SignalDirection,
-    """Structure-aware ATR stop and R:R take-profit. TP is always at least 1.5R."""
-    rr = max(rr, MIN_RR)
+    atr_mult: float = 1.5,
     rr: float = 2.0,
 ) -> tuple[float, float, str]:
-    """Structure-aware ATR stop and R:R take-profit."""
+    """Structure-aware ATR stop and R:R take-profit. TP is always at least 1.5R."""
+    rr = max(rr, MIN_RR)
     atr = max(snapshot.atr, 1e-8)
     price = snapshot.close
     method = "atr"
 
     if direction == SignalDirection.BUY:
         structure_sl = snapshot.swing_low - 0.1 * atr
-        risk = max(price - sl, 1e-8)
+        atr_sl = price - atr_mult * atr
         sl = min(structure_sl, atr_sl) if structure_sl < price else atr_sl
+        if structure_sl < price:
+            method = "atr_swing"
+        risk = max(price - sl, 1e-8)
+        tp = price + rr * risk
         # Prefer resistance as TP only when it offers at least MIN_RR
         if snapshot.resistance > price and (snapshot.resistance - price) >= MIN_RR * risk:
-        risk = price - sl
-        tp = price + rr * risk
+            tp = snapshot.resistance
+            method = "atr_structure"
         # Enforce minimum RR
         if (tp - price) < MIN_RR * risk:
             tp = price + MIN_RR * risk
-        # Prefer resistance as TP if it offers at least 1.5R
-        if snapshot.resistance > price and (snapshot.resistance - price) >= 1.5 * risk:
-            tp = snapshot.resistance
-        risk = max(sl - price, 1e-8)
     else:
-        if snapshot.support < price and (price - snapshot.support) >= MIN_RR * risk:
+        structure_sl = snapshot.swing_high + 0.1 * atr
         atr_sl = price + atr_mult * atr
         sl = max(structure_sl, atr_sl) if structure_sl > price else atr_sl
+        if structure_sl > price:
+            method = "atr_swing"
+        risk = max(sl - price, 1e-8)
+        tp = price - rr * risk
+        if snapshot.support < price and (price - snapshot.support) >= MIN_RR * risk:
+            tp = snapshot.support
+            method = "atr_structure"
         # Enforce minimum RR
         if (price - tp) < MIN_RR * risk:
             tp = price - MIN_RR * risk
-        if structure_sl > price:
-            method = "atr_swing"
-        risk = sl - price
-        tp = price - rr * risk
-        if snapshot.support < price and (price - snapshot.support) >= 1.5 * risk:
-            tp = snapshot.support
-            method = "atr_structure"
     return sl, tp, method
 
 

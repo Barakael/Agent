@@ -21,6 +21,18 @@ sudo systemctl enable wayda-trading-engine wayda-ai-agent
 sudo systemctl start wayda-trading-engine wayda-ai-agent
 ```
 
+## The trading engine config does not deploy itself
+
+`vps/deploy.sh` excludes `trading-engine/.env` from rsync, so edit that file on the server after deploy.
+See [trading-engine/docs/METHOD.md](../trading-engine/docs/METHOD.md).
+
+```bash
+ssh root@161.97.182.204
+cd /etc/bin/agent/trading-engine
+nano .env
+systemctl restart wayda-trading-engine
+```
+
 ## Demo validation (A5)
 
 ```bash

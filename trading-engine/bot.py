@@ -37,7 +37,7 @@ from data.calendar import EconomicCalendar
 from data.candle_aggregator import CandleAggregator
 from data.deriv_ws import DerivWebSocketClient
 from execution.multiplier import contract_room_pct, validate_multiplier
-from execution.orders import OrderExecutor, UnencodableStop
+from execution.orders import InvertedRR, OrderExecutor, UnencodableStop
 from execution.positions import PositionManager
 from journal.writer import JournalWriter
 from number_engine import NumberEngine

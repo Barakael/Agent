@@ -99,6 +99,60 @@ class TradingDailyAnalysisCommand extends Command
                 $this->warn('Could not sync AI decision to trading engine: '.$e->getMessage());
             }
 
+            // Post the active plan so the trading engine can actually use it.
+            // pushAiDecision is advisory only; PUT /plan/active is what the bot checks.
+            $today = now()->utc()->toDateString(); // YYYY-MM-DD UTC
+            $majorPairs = ['frxEURUSD', 'frxGBPUSD', 'frxUSDJPY', 'frxAUDUSD', 'frxUSDCAD'];
+            $rec = $record->recommendation ?? [];
+            $recBias = strtolower($rec['directional_bias'] ?? 'neutral');
+            // bias trade_mode requires a non-neutral directional_bias
+            $canTrade = in_array($record->decision, ['GO', 'CAUTION'])
+                && !empty($rec)
+                && in_array($recBias, ['buy', 'sell']);
+            if ($canTrade) {
+                $recPairs = array_values(array_filter($rec['pairs'] ?? [], fn($p) => in_array($p, $majorPairs)));
+                if (empty($recPairs)) {
+                    $recPairs = ['frxEURUSD'];
+                }
+                $planPayload = [
+                    'date'             => $today,
+                    'trade_mode'       => 'bias',
+                    'directional_bias' => $recBias,
+                    'pairs'            => $recPairs,
+                    'hold_policy'      => $rec['hold_policy'] ?? 'swing',
+                    'sl_pips'          => $rec['sl_pips'] ?? 15,
+                    'tp_pips'          => $rec['tp_pips'] ?? 30,
+                    'risk_percent'     => $rec['risk_percent'] ?? 1.5,
+                    'max_stake_usd'    => $rec['max_stake_usd'] ?? 25.0,
+                    'notes'            => $rec['notes'] ?? '',
+                    'source'           => 'daily-analysis-cron',
+                ];
+                try {
+                    $trading->putActivePlan($planPayload);
+                    $this->info("Active plan posted: {$recBias} on ".implode(',', $recPairs));
+                } catch (\Exception $e) {
+                    $this->warn('Could not post active plan: '.$e->getMessage());
+                }
+            } else {
+                // NO-GO or neutral — post pattern stand-aside so bot knows to skip
+                try {
+                    $trading->putActivePlan([
+                        'date'             => $today,
+                        'trade_mode'       => 'pattern',
+                        'directional_bias' => 'neutral',
+                        'pairs'            => ['frxEURUSD'],
+                        'hold_policy'      => 'intraday',
+                        'sl_pips'          => 15,
+                        'tp_pips'          => 30,
+                        'notes'            => 'NO-GO day — stand aside',
+                        'source'           => 'daily-analysis-cron',
+                    ]);
+                    $this->info('Stand-aside plan posted (NO-GO)');
+                } catch (\Exception $e) {
+                    $this->warn('Could not post stand-aside plan: '.$e->getMessage());
+                }
+            }
+
             $this->info("Daily analysis stored: {$record->decision}");
 
             return self::SUCCESS;

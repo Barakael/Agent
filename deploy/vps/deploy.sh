@@ -37,8 +37,8 @@ ssh "$HOST" "APP_DIR='$REMOTE' bash -s" <<'REMOTE_SCRIPT'
   --exclude '.git' \
 cd "$APP_DIR"
   --exclude '.venv' \
-  --exclude 'frontend/node_modules' \
-  --exclude '**/__pycache__' \
+mkdir -p "$APP_DIR/trading-engine/.cache/matplotlib" "$APP_DIR/trading-engine/reports"
+chown -R wayda:wayda "$APP_DIR" || true
   --exclude 'trading-engine/trading_journal.db' \
   --exclude 'backend/database/database.sqlite' \
   --exclude 'backend/database/database.sqlite-*' \

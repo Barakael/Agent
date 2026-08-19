@@ -6,6 +6,8 @@ from bias.bias_6h import BiasState
 from config import settings
 from signals.engine import SignalDirection
 
+MIN_RR = 1.5  # never ship a target closer than 1.5x the stop
+
 
 def bias_sl_tp(
     bias: BiasState,

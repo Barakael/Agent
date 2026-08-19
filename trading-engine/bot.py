@@ -769,6 +769,68 @@ class TradingBot:
             )
             return
 
+        # Daily-plan gate: require today's plan and check 6h bias agrees with it.
+        active_plan = self.get_active_plan()
+        if active_plan is None:
+            skip = "no_daily_plan"
+            gates["failed"] = list(dict.fromkeys(gates["failed"] + [skip]))
+            self._record_analysis(
+                symbol,
+                price=price,
+                regime=regime.label,
+                rsi=bias.rsi,
+                atr=bias.atr_6h,
+                epoch=epoch,
+                bars=len(df),
+                best_strategy="bias_pipeline",
+                confidence=None,
+                skip_reason=skip,
+                signal_direction=None,
+                bias=bias.direction,
+                bias_id=bias.bias_id,
+                gates=gates,
+                pipeline="bias_v1",
+            )
+            return
+        plan_dir = (active_plan.directional_bias or "neutral").lower()
+        bias_dir = (bias.direction or "").upper()
+        plan_conflict = False
+        if plan_dir == "buy" and bias_dir == "SELL_ONLY":
+            plan_conflict = True
+        elif plan_dir == "sell" and bias_dir == "BUY_ONLY":
+            plan_conflict = True
+        elif plan_dir == "neutral":
+            plan_conflict = True  # neutral plan = stand-aside; no opens today
+        if plan_conflict:
+            skip = "plan_bias_conflict"
+            gates["failed"] = list(dict.fromkeys(gates["failed"] + [skip]))
+            self._record_analysis(
+                symbol,
+                price=price,
+                regime=regime.label,
+                rsi=bias.rsi,
+                atr=bias.atr_6h,
+                epoch=epoch,
+                bars=len(df),
+                best_strategy="bias_pipeline",
+                confidence=None,
+                skip_reason=skip,
+                signal_direction=None,
+                bias=bias.direction,
+                bias_id=bias.bias_id,
+                gates=gates,
+                pipeline="bias_v1",
+            )
+            self.feature_store.log(
+                symbol=symbol,
+                event="skip",
+                features={**feats, "skip": skip, "plan_dir": plan_dir, "bias_dir": bias_dir},
+                bias_id=bias.bias_id,
+                regime=regime.label,
+                bias=bias.direction,
+            )
+            return
+
         # Thesis lock: open position or same bias_id already traded
         thesis_open = False
         try:

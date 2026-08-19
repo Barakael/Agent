@@ -35,7 +35,7 @@ def bias_sl_tp(
         atr_sl = entry + atr_mult * atr
         sl = max(swing_sl, atr_sl) if swing_sl > entry else atr_sl
         if swing_sl > entry:
-            method = "bias_6h_swing"
+        tp = min(entry - rr * risk, entry - MIN_RR * risk)
         risk = max(sl - entry, 1e-8)
         tp = entry - rr * risk
     return sl, tp, method

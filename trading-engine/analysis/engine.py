@@ -233,6 +233,19 @@ class AnalysisEngine:
                 sources["preflight_soft_pass"] = True
                 sources["number_engine_bypass"] = True
 
+        # When bias pipeline is active, the 5m RSI backtest is irrelevant — the
+        # 24h→6h→1h confirmation chain is the entry gate. Do not NO-GO the whole
+        # bot just because the old pattern backtest failed.
+        if settings.BIAS_PIPELINE and reasons:
+            only_backtest = all(
+                r.startswith("backtest_failed_") or r.startswith("backtest_error_")
+                for r in reasons
+            )
+            if only_backtest:
+                reasons = []
+                sources["preflight_soft_pass"] = True
+                sources["bias_pipeline_bypass"] = True
+
         # Soften: if all failures are backtest_* but at least one pair has positive expectancy, allow GO
         if reasons and all(r.startswith("backtest_failed_") or r.startswith("backtest_error_") for r in reasons):
             soft = False

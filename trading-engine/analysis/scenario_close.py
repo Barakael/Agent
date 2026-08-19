@@ -54,7 +54,10 @@ def evaluate_close(
         engine = SignalEngine()
         signal = engine.evaluate(symbol, df)
         if signal:
-            reversal = (
+    # Dead-code guard: Deriv's dollar stop handles actual stop triggers.
+    # We only soft-stop here if we somehow have no dollar SL set at all.
+    sl_limit = limit_order.get("stop_loss")
+    if sl_limit is None and profit < -float(position.get("buy_price", 1) or 1) * 0.5:
                 is_long and signal.direction == SignalDirection.SELL
             ) or (not is_long and signal.direction == SignalDirection.BUY)
             if reversal:

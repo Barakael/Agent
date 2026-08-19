@@ -1062,6 +1062,13 @@ class TradingBot:
             self.risk.risk_percent = settings.RISK_PERCENT_PER_TRADE
 
         risk_result = self.risk.evaluate(
+            return False
+        except InvertedRR as exc:
+            logger.warning("Signal skipped for %s: %s", symbol, exc)
+            self.journal.log_signal_rejected(signal, f"rr_below_minimum: {exc}"[:500])
+            cached = self._last_analysis.get(symbol)
+            if cached:
+                cached["skip_reason"] = f"rr_below_minimum: {exc}"[:200]
             signal,
             self.client.balance,
             trading_paused=self._paused,

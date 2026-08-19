@@ -16,7 +16,7 @@ def bias_sl_tp(
     *,
     atr_mult: float | None = None,
     rr: float | None = None,
-) -> tuple[float, float, str]:
+    rr = max(rr if rr is not None else float(settings.DEFAULT_RR_RATIO), MIN_RR)
     atr_mult = atr_mult if atr_mult is not None else float(settings.BIAS_SL_ATR_MULT)
     rr = rr if rr is not None else float(settings.DEFAULT_RR_RATIO)
     atr = max(float(bias.atr_6h or 0.0), 1e-8)

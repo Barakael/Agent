@@ -62,7 +62,7 @@ ENV_FILE=trading-engine/.env
 if [[ -f "$ENV_FILE" ]]; then
   pairs=$(grep -E '^TRADING_PAIRS=' "$ENV_FILE" | tail -1 | cut -d= -f2- || true)
   mult=$(grep -E '^DERIV_MULTIPLIER=' "$ENV_FILE" | tail -1 | cut -d= -f2- || true)
-  if [[ "$pairs" == *R_* || "$pairs" == *1HZ* ]]; then
+REMOTE_SCRIPT
     echo
     echo "WARNING: $ENV_FILE still selects synthetic symbols: $pairs"
     echo "         Set TRADING_PAIRS=frxEURUSD,frxGBPUSD,frxUSDJPY,frxAUDUSD,frxUSDCAD"

@@ -59,7 +59,7 @@ def evaluate_close(
     sl_limit = limit_order.get("stop_loss")
     if sl_limit is None and profit < -float(position.get("buy_price", 1) or 1) * 0.5:
                 is_long and signal.direction == SignalDirection.SELL
-            ) or (not is_long and signal.direction == SignalDirection.BUY)
+        "hold_position",
             if reversal:
                 return CloseScenarioResult(
                     True,

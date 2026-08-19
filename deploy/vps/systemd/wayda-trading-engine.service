@@ -8,6 +8,7 @@ User=wayda
 Group=wayda
 WorkingDirectory=/etc/bin/agent/trading-engine
 EnvironmentFile=/etc/bin/agent/trading-engine/.env
+Environment=MPLCONFIGDIR=/etc/bin/agent/trading-engine/.cache/matplotlib
 ExecStart=/etc/bin/agent/trading-engine/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8002
 Restart=always
 RestartSec=10

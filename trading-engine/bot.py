@@ -1041,9 +1041,7 @@ class TradingBot:
             open_count = len(self.positions.positions or [])
             if open_count >= max_open:
                 skip = f"max_open_positions ({open_count}>={max_open})"
-        if not self.session.is_session_open():
-            # Session gate applies to ALL opens (including swing) for forex pairs.
-            self.journal.log_signal_rejected(signal, "outside_session_window")
+                cached = self._last_analysis.get(symbol)
                 if cached:
                     cached["skip_reason"] = skip
                 self.journal.log_signal_rejected(signal, skip)
@@ -1062,13 +1060,6 @@ class TradingBot:
             self.risk.risk_percent = settings.RISK_PERCENT_PER_TRADE
 
         risk_result = self.risk.evaluate(
-            return False
-        except InvertedRR as exc:
-            logger.warning("Signal skipped for %s: %s", symbol, exc)
-            self.journal.log_signal_rejected(signal, f"rr_below_minimum: {exc}"[:500])
-            cached = self._last_analysis.get(symbol)
-            if cached:
-                cached["skip_reason"] = f"rr_below_minimum: {exc}"[:200]
             signal,
             self.client.balance,
             trading_paused=self._paused,
@@ -1112,7 +1103,9 @@ class TradingBot:
             return True
 
         hold = getattr(signal, "hold_policy", "intraday")
-        if hold != "swing" and not self.session.is_session_open():
+        if not self.session.is_session_open():
+            # Session gate applies to ALL opens (including swing) for forex pairs.
+            self.journal.log_signal_rejected(signal, "outside_session_window")
             return False
 
         if (
@@ -1133,6 +1126,13 @@ class TradingBot:
             cached = self._last_analysis.get(symbol)
             if cached:
                 cached["skip_reason"] = f"unencodable_stop: {exc}"[:200]
+            return False
+        except InvertedRR as exc:
+            logger.warning("Signal skipped for %s: %s", symbol, exc)
+            self.journal.log_signal_rejected(signal, f"rr_below_minimum: {exc}"[:500])
+            cached = self._last_analysis.get(symbol)
+            if cached:
+                cached["skip_reason"] = f"rr_below_minimum: {exc}"[:200]
             return False
         except Exception as exc:
             msg = f"execution_failed: {exc}"

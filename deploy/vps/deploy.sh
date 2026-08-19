@@ -35,7 +35,7 @@ VITE_API_URL="$API_URL" npm run build
 echo "==> Rsync to $HOST:$REMOTE"
 ssh "$HOST" "APP_DIR='$REMOTE' bash -s" <<'REMOTE_SCRIPT'
   --exclude '.git' \
-  --exclude 'node_modules' \
+cd "$APP_DIR"
   --exclude '.venv' \
   --exclude 'frontend/node_modules' \
   --exclude '**/__pycache__' \

@@ -54,12 +54,9 @@ def evaluate_close(
         engine = SignalEngine()
         signal = engine.evaluate(symbol, df)
         if signal:
-    # Dead-code guard: Deriv's dollar stop handles actual stop triggers.
-    # We only soft-stop here if we somehow have no dollar SL set at all.
-    sl_limit = limit_order.get("stop_loss")
-    if sl_limit is None and profit < -float(position.get("buy_price", 1) or 1) * 0.5:
+            reversal = (
                 is_long and signal.direction == SignalDirection.SELL
-        "hold_position",
+            ) or (not is_long and signal.direction == SignalDirection.BUY)
             if reversal:
                 return CloseScenarioResult(
                     True,
@@ -67,11 +64,14 @@ def evaluate_close(
                     {"signal": signal.reason, "profit": profit},
                 )
 
-    if profit < -float(position.get("buy_price", 1) or 1) * 0.5:
+    # Dead-code guard: Deriv's dollar stop handles actual stop triggers.
+    # We only soft-stop here if we somehow have no dollar SL set at all.
+    sl_limit = limit_order.get("stop_loss")
+    if sl_limit is None and profit < -float(position.get("buy_price", 1) or 1) * 0.5:
         return CloseScenarioResult(True, "stop_loss_threshold", {"profit": profit})
 
     return CloseScenarioResult(
         False,
-        "hold_position_scenario_favorable",
+        "hold_position",
         {"profit": profit, "symbol": symbol},
     )

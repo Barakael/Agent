@@ -25,6 +25,13 @@ class UnencodableStop(RuntimeError):
     """Raised when the chart stop cannot fit inside the contract's room."""
 
 
+class InvertedRR(RuntimeError):
+    """Raised when dollar TP is below the minimum 1.5x dollar SL after cost calibration."""
+
+
+MIN_DOLLAR_RR = 1.5
+
+
 @dataclass(frozen=True)
 class ContractBarriers:
     """Chart distances expressed as contract dollars and percentages."""

@@ -1041,7 +1041,9 @@ class TradingBot:
             open_count = len(self.positions.positions or [])
             if open_count >= max_open:
                 skip = f"max_open_positions ({open_count}>={max_open})"
-                cached = self._last_analysis.get(symbol)
+        if not self.session.is_session_open():
+            # Session gate applies to ALL opens (including swing) for forex pairs.
+            self.journal.log_signal_rejected(signal, "outside_session_window")
                 if cached:
                     cached["skip_reason"] = skip
                 self.journal.log_signal_rejected(signal, skip)

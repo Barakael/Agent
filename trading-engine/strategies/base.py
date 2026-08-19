@@ -123,7 +123,7 @@ def atr_sl_tp(
             tp = snapshot.resistance
         risk = max(sl - price, 1e-8)
     else:
-        structure_sl = snapshot.swing_high + 0.1 * atr
+        if snapshot.support < price and (price - snapshot.support) >= MIN_RR * risk:
         atr_sl = price + atr_mult * atr
         sl = max(structure_sl, atr_sl) if structure_sl > price else atr_sl
         if structure_sl > price:

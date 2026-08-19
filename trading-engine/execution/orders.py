@@ -148,6 +148,14 @@ class OrderExecutor:
 
         if not barriers.encodable:
             detail = (
+
+        if usd_sl > 0 and usd_tp < MIN_DOLLAR_RR * usd_sl:
+            detail = (
+                f"{signal.symbol} dollar RR {usd_tp:.2f}/{usd_sl:.2f}="
+                f"{usd_tp/usd_sl:.2f} < {MIN_DOLLAR_RR} after calibration"
+            )
+            logger.warning("Rejecting signal — %s", detail)
+            raise InvertedRR(detail)
                 f"{signal.symbol} stop needs {barriers.sl_pct * 100:.2f}% but multiplier "
                 f"{barriers.multiplier:g} liquidates at {barriers.room_pct * 100:.2f}%"
             )

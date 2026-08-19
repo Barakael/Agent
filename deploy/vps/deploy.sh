@@ -12,6 +12,15 @@ cd "$ROOT/frontend"
 npm ci --prefer-offline
 VITE_API_URL="$API_URL" npm run build
 
+# --delete removes anything on the host that is not here, so everything the host
+# generates for itself is excluded rather than destroyed on every deploy:
+#   * demo reports and review charts, which are the record of what was traded
+#   * backend/vendor, built on the host from composer.lock — deleting it meant
+#     re-downloading 7,000 files with a cold cache, and a broken backend if
+#     composer failed
+#   * composer's own cache and HOME dirs at the app root
+#   * data/active_plan.json, which is live state here and would be overwritten
+#     with whatever stale plan happens to sit on the developer's machine
 echo "==> Rsync to $HOST:$REMOTE"
 rsync -az --delete \
   --exclude '.git' \

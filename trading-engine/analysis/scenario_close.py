@@ -33,8 +33,18 @@ def evaluate_close(
         return CloseScenarioResult(True, "news_window_close", {"news": news_reason})
 
     profit = float(position.get("profit", 0) or 0)
-    if profit >= 0:
-        return CloseScenarioResult(True, "take_profit_or_breakeven", {"profit": profit})
+
+    # Only close a winning trade when it has hit or surpassed its TP dollar limit.
+    # Deriv handles the actual TP/SL triggers; we do NOT close-out just because
+    # profit > 0 — that was truncating winners far short of the target.
+    limit_order = position.get("limit_order") or {}
+    tp_limit = limit_order.get("take_profit")
+    if tp_limit is not None:
+        try:
+            if profit >= float(tp_limit):
+                return CloseScenarioResult(True, "take_profit_reached", {"profit": profit, "tp": tp_limit})
+        except (TypeError, ValueError):
+            pass
 
     symbol = position.get("underlying") or position.get("symbol") or ""
     contract_type = (position.get("contract_type") or "").upper()

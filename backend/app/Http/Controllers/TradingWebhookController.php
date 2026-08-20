@@ -80,7 +80,7 @@ class TradingWebhookController extends Controller
                 'latest_report' => $report,
                 'latest_ai_decision' => $decision,
                 'market_brief' => $marketBrief,
-                'allowlist_pairs' => ['frxEURUSD', 'frxGBPUSD', 'frxUSDJPY', 'frxAUDUSD'],
+                'allowlist_pairs' => ['frxEURUSD', 'frxGBPUSD', 'frxUSDJPY', 'frxAUDUSD', 'frxUSDCAD'],
                 'strategy_win_rates' => $status['strategy_win_rates'] ?? [],
                 'armed_strategies' => $status['armed_strategies'] ?? [],
                 'clamps' => [
@@ -90,10 +90,15 @@ class TradingWebhookController extends Controller
                     'swing_tp_pips' => [10, 200],
                     'risk_percent_max' => 2.0,
                     'max_stake_usd_ceiling' => 50,
+                    'pairs_max' => 3,
+                    'max_trades_today' => [0, 4],
+                    'entry_styles' => ['market', 'pullback'],
+                    'execution_modes' => ['cursor_execute', 'chart_confirm'],
                     'strategy_ids' => self::STRATEGY_IDS,
                     'trade_modes' => ['pattern', 'bias'],
                     'hold_policies' => ['intraday', 'swing'],
                     'min_strategy_win_rate' => 70,
+                    'bot_role' => 'execute_only',
                 ],
             ],
         ]);
@@ -103,8 +108,8 @@ class TradingWebhookController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'date' => 'required|date_format:Y-m-d',
-            'pairs' => 'required|array|min:1',
-            'pairs.*' => 'required|string|in:frxEURUSD,frxGBPUSD,frxUSDJPY,frxAUDUSD',
+            'pairs' => 'required|array|min:1|max:3',
+            'pairs.*' => 'required|string|in:frxEURUSD,frxGBPUSD,frxUSDJPY,frxAUDUSD,frxUSDCAD',
             'strategy_id' => 'sometimes|string|in:'.implode(',', self::STRATEGY_IDS),
             'enabled_strategies' => 'sometimes|array|max:5',
             'enabled_strategies.*' => 'string|in:'.implode(',', self::STRATEGY_IDS),
@@ -119,6 +124,19 @@ class TradingWebhookController extends Controller
             'confidence' => 'sometimes|integer|min:0|max:100',
             'notes' => 'sometimes|string|max:2000',
             'source' => 'sometimes|string|max:64',
+            'execution_mode' => 'sometimes|string|in:cursor_execute,chart_confirm',
+            'max_trades_today' => 'sometimes|integer|min:0|max:4',
+            'entry_style' => 'sometimes|string|in:market,pullback',
+            'review' => 'sometimes|string|max:4000',
+            'avoid_until_utc' => 'sometimes|nullable|string|max:64',
+            'setups' => 'sometimes|array|max:3',
+            'setups.*.symbol' => 'required_with:setups|string|in:frxEURUSD,frxGBPUSD,frxUSDJPY,frxAUDUSD,frxUSDCAD',
+            'setups.*.direction' => 'required_with:setups|string|in:buy,sell',
+            'setups.*.entry_style' => 'sometimes|string|in:market,pullback',
+            'setups.*.entry_price' => 'sometimes|nullable|numeric',
+            'setups.*.sl_pips' => 'sometimes|nullable|integer|min:5|max:80',
+            'setups.*.tp_pips' => 'sometimes|nullable|integer|min:10|max:200',
+            'setups.*.rationale' => 'sometimes|string|max:1000',
         ]);
 
         if ($validator->fails()) {
@@ -148,6 +166,12 @@ class TradingWebhookController extends Controller
         $data['confidence'] = (int) ($data['confidence'] ?? 50);
         $data['notes'] = $data['notes'] ?? '';
         $data['source'] = $data['source'] ?? 'cursor-automation';
+        $data['execution_mode'] = $data['execution_mode'] ?? 'cursor_execute';
+        $data['max_trades_today'] = min((int) ($data['max_trades_today'] ?? 3), 4);
+        $data['entry_style'] = $data['entry_style'] ?? 'pullback';
+        $data['review'] = $data['review'] ?? '';
+        $data['avoid_until_utc'] = $data['avoid_until_utc'] ?? null;
+        $data['setups'] = $data['setups'] ?? [];
 
         if ($data['trade_mode'] === 'bias' && ($data['directional_bias'] ?? 'neutral') === 'neutral') {
             return response()->json(['message' => 'directional_bias required for bias trade_mode'], 422);
@@ -161,6 +185,22 @@ class TradingWebhookController extends Controller
         if ($data['tp_pips'] < $data['sl_pips']) {
             return response()->json(['message' => 'tp_pips must be >= sl_pips'], 422);
         }
+
+        foreach ($data['setups'] as &$setup) {
+            $setup['entry_style'] = $setup['entry_style'] ?? $data['entry_style'];
+            if (isset($setup['sl_pips'])) {
+                $setup['sl_pips'] = min((int) $setup['sl_pips'], $slMax);
+            }
+            if (isset($setup['tp_pips'])) {
+                $setup['tp_pips'] = min((int) $setup['tp_pips'], $tpMax);
+            }
+            $sl = (int) ($setup['sl_pips'] ?? $data['sl_pips']);
+            $tp = (int) ($setup['tp_pips'] ?? $data['tp_pips']);
+            if ($tp < $sl) {
+                return response()->json(['message' => 'setup tp_pips must be >= sl_pips'], 422);
+            }
+        }
+        unset($setup);
 
         try {
             $result = $this->trading->putActivePlan($data);
@@ -191,7 +231,7 @@ class TradingWebhookController extends Controller
             File::makeDirectory($reviewsDir, 0755, true);
         }
         $reviewPath = $reviewsDir.'/review_'.$data['date'].'.md';
-        $notes = $data['notes'] !== '' ? $data['notes'] : 'Plan submitted by automation.';
+        $notes = $data['review'] !== '' ? $data['review'] : ($data['notes'] !== '' ? $data['notes'] : 'Plan submitted by automation.');
         File::put($reviewPath, "# Trading review {$data['date']}\n\n{$notes}\n\n```json\n".json_encode($data, JSON_PRETTY_PRINT)."\n```\n");
 
         return response()->json($result);

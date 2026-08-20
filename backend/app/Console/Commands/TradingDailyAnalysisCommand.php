@@ -17,9 +17,24 @@ class TradingDailyAnalysisCommand extends Command
     public function handle(TradingService $trading): int
     {
         try {
-            $preflight = $trading->getPreflightLatest();
-            $metrics = $trading->metrics();
-            $status = $trading->status();
+            $preflight = [];
+            $metrics = [];
+            $status = [];
+            try {
+                $preflight = $trading->getPreflightLatest();
+            } catch (\Exception $e) {
+                $this->warn('preflight unavailable: '.$e->getMessage());
+            }
+            try {
+                $metrics = $trading->metrics();
+            } catch (\Exception $e) {
+                $this->warn('metrics unavailable: '.$e->getMessage());
+            }
+            try {
+                $status = $trading->status();
+            } catch (\Exception $e) {
+                $this->warn('status unavailable: '.$e->getMessage());
+            }
             $marketBrief = [];
             try {
                 $briefResp = $trading->getMarketBrief();
@@ -99,99 +114,79 @@ class TradingDailyAnalysisCommand extends Command
                 $this->warn('Could not sync AI decision to trading engine: '.$e->getMessage());
             }
 
-            // Post the active plan so the trading engine can actually use it.
-            // pushAiDecision is advisory only; PUT /plan/active is what the bot checks.
-            $today = now()->utc()->toDateString(); // YYYY-MM-DD UTC
-            $majorPairs = ['frxEURUSD', 'frxGBPUSD', 'frxUSDJPY', 'frxAUDUSD', 'frxUSDCAD'];
-            $rec = $record->recommendation ?? [];
-            $recBias = strtolower($rec['directional_bias'] ?? 'neutral');
-            // bias trade_mode requires a non-neutral directional_bias
-            $canTrade = in_array($record->decision, ['GO', 'CAUTION'])
-                && !empty($rec)
-                && in_array($recBias, ['buy', 'sell']);
-            if ($canTrade) {
-                $recPairs = array_values(array_filter($rec['pairs'] ?? [], fn($p) => in_array($p, $majorPairs)));
-                if (empty($recPairs)) {
-                    $recPairs = ['frxEURUSD'];
-                }
-                $planPayload = [
-                    'date'             => $today,
-                    'trade_mode'       => 'bias',
-                    'directional_bias' => $recBias,
-                    'pairs'            => $recPairs,
-                    'hold_policy'      => $rec['hold_policy'] ?? 'swing',
-                    'sl_pips'          => $rec['sl_pips'] ?? 15,
-                    'tp_pips'          => $rec['tp_pips'] ?? 30,
-                    'risk_percent'     => $rec['risk_percent'] ?? 1.5,
-                    'max_stake_usd'    => $rec['max_stake_usd'] ?? 25.0,
-                    'notes'            => $rec['notes'] ?? '',
-                    'source'           => 'daily-analysis-cron',
-                ];
-                try {
-                    $trading->putActivePlan($planPayload);
-                    $this->info("Active plan posted: {$recBias} on ".implode(',', $recPairs));
-                } catch (\Exception $e) {
-                    $this->warn('Could not post active plan: '.$e->getMessage());
-                }
-            } else {
-                // NO-GO or neutral — post pattern stand-aside so bot knows to skip
-                try {
-                    $trading->putActivePlan([
-                        'date'             => $today,
-                        'trade_mode'       => 'pattern',
-                        'directional_bias' => 'neutral',
-                        'pairs'            => ['frxEURUSD'],
-                        'hold_policy'      => 'intraday',
-                        'sl_pips'          => 15,
-                        'tp_pips'          => 30,
-                        'notes'            => 'NO-GO day — stand aside',
-                        'source'           => 'daily-analysis-cron',
-                    ]);
-                    $this->info('Stand-aside plan posted (NO-GO)');
-                } catch (\Exception $e) {
-                    $this->warn('Could not post stand-aside plan: '.$e->getMessage());
-                }
-            }
+            // Cursor Automation owns BUY/SELL plans. This cron must NEVER post a
+            // directional thesis (especially not the old hardcoded buy fallback).
+            // Only post stand-aside when there is no cursor-automation plan for today.
+            $this->syncStandAsideIfNeeded($trading);
 
             $this->info("Daily analysis stored: {$record->decision}");
 
             return self::SUCCESS;
         } catch (\Exception $e) {
             $this->error('Daily analysis failed: '.$e->getMessage());
+            // Still try to clear fake directional plans if Cursor has not posted.
+            try {
+                $this->syncStandAsideIfNeeded($trading);
+            } catch (\Exception $inner) {
+                $this->warn('Stand-aside after failure also failed: '.$inner->getMessage());
+            }
 
             return self::FAILURE;
         }
     }
 
-    protected function fallbackRecommendation(array $marketBrief, string $decision): array
+    /**
+     * Leave Cursor plans alone; otherwise post neutral awaiting_cursor_plan.
+     */
+    protected function syncStandAsideIfNeeded(TradingService $trading): void
     {
-        $fitness = $marketBrief['strategy_fitness'] ?? [];
-        $armed = [];
-        foreach ($fitness as $sid => $meta) {
-            if (is_array($meta) && ($meta['passed'] ?? false)) {
-                $armed[] = $sid;
-            }
+        $today = now()->utc()->toDateString();
+        $existing = null;
+        try {
+            $existing = $trading->getActivePlan();
+        } catch (\Exception $e) {
+            $this->warn('Could not read active plan: '.$e->getMessage());
         }
-        if ($decision === 'GO' && $armed !== []) {
-            return [
-                'recommended_trade_mode' => 'pattern',
-                'pairs' => array_slice($marketBrief['constraints']['pairs_allowlist'] ?? ['frxEURUSD'], 0, 1),
-                'enabled_strategies' => array_slice($armed, 0, 5),
-                'directional_bias' => 'neutral',
-                'hold_policy' => 'intraday',
-                'confidence' => 45,
-                'notes' => 'Fallback pattern recommendation',
-            ];
+        $active = is_array($existing) ? ($existing['data'] ?? $existing['stored'] ?? null) : null;
+        $activeSource = is_array($active) ? strtolower((string) ($active['source'] ?? '')) : '';
+        $activeDate = is_array($active) ? (string) ($active['date'] ?? '') : '';
+        $isCursorToday = $activeDate === $today
+            && str_starts_with($activeSource, 'cursor');
+
+        if ($isCursorToday) {
+            $this->info('Leaving Cursor Automation plan in place (source='.$activeSource.')');
+
+            return;
         }
 
+        $trading->putActivePlan([
+            'date'             => $today,
+            'trade_mode'       => 'pattern',
+            'directional_bias' => 'neutral',
+            'pairs'            => ['frxEURUSD'],
+            'hold_policy'      => 'intraday',
+            'sl_pips'          => 15,
+            'tp_pips'          => 30,
+            'notes'            => 'awaiting_cursor_plan',
+            'source'           => 'daily-analysis-cron',
+        ]);
+        $this->info('Stand-aside posted (awaiting_cursor_plan)');
+    }
+
+    /**
+     * Log-only recommendation when the local AI agent is down.
+     * Must never invent buy/sell — Cursor Automation owns direction.
+     */
+    protected function fallbackRecommendation(array $marketBrief, string $decision): array
+    {
         return [
-            'recommended_trade_mode' => 'bias',
+            'recommended_trade_mode' => 'pattern',
             'pairs' => ['frxEURUSD'],
-            'enabled_strategies' => ['bias_swing'],
-            'directional_bias' => 'buy',
-            'hold_policy' => 'swing',
-            'confidence' => 35,
-            'notes' => 'Fallback bias recommendation',
+            'enabled_strategies' => [],
+            'directional_bias' => 'neutral',
+            'hold_policy' => 'intraday',
+            'confidence' => 0,
+            'notes' => 'awaiting_cursor_plan — local AI unavailable; no directional fallback',
         ];
     }
 }

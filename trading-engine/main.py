@@ -357,6 +357,16 @@ async def run_backtest(auth: bool = Depends(validate_api_key)):
     return {"data": results}
 
 
+class PlanSetupRequest(BaseModel):
+    symbol: str
+    direction: str
+    entry_style: str = "pullback"
+    entry_price: float | None = None
+    sl_pips: int | None = None
+    tp_pips: int | None = None
+    rationale: str = ""
+
+
 class DailyPlanRequest(BaseModel):
     date: str
     pairs: list[str]
@@ -373,6 +383,12 @@ class DailyPlanRequest(BaseModel):
     confidence: int = 50
     notes: str = ""
     source: str = "cursor-automation"
+    execution_mode: str = "cursor_execute"
+    max_trades_today: int = 3
+    entry_style: str = "pullback"
+    review: str = ""
+    avoid_until_utc: str | None = None
+    setups: list[PlanSetupRequest] | None = None
 
 
 @app.get("/plan/active")

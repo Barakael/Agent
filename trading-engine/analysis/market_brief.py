@@ -47,6 +47,32 @@ def _pair_snapshot(symbol: str, df: pd.DataFrame, calendar: EconomicCalendar) ->
         elif float(macd_line.iloc[-1]) < float(signal_line.iloc[-1]):
             trend = "bearish"
 
+    # Chart context for Cursor Automation (bot does not re-analyze; Cursor decides)
+    ema21 = None
+    atr = None
+    swing_high = None
+    swing_low = None
+    try:
+        ema21 = float(df["close"].ewm(span=21, adjust=False).mean().iloc[-1])
+        # Simple ATR(14)
+        high = df["high"].astype(float)
+        low = df["low"].astype(float)
+        prev_close = df["close"].astype(float).shift(1)
+        tr = pd.concat(
+            [(high - low), (high - prev_close).abs(), (low - prev_close).abs()],
+            axis=1,
+        ).max(axis=1)
+        atr = float(tr.tail(14).mean()) if len(tr) >= 14 else float(tr.mean())
+        look = min(48, len(df))
+        swing_high = float(high.tail(look).max())
+        swing_low = float(low.tail(look).min())
+    except Exception:
+        pass
+
+    dist_ema_pct = None
+    if ema21 and close:
+        dist_ema_pct = round(((close - ema21) / ema21) * 100, 4)
+
     return {
         "price": round(close, 5 if "JPY" not in symbol else 3),
         "rsi": round(rsi, 2) if rsi is not None else None,
@@ -60,6 +86,16 @@ def _pair_snapshot(symbol: str, df: pd.DataFrame, calendar: EconomicCalendar) ->
         "signal_reason": signal.reason if signal else None,
         "news_paused": bool(news_paused),
         "news_reason": news_reason or None,
+        "ema21": round(ema21, 5 if "JPY" not in symbol else 3) if ema21 else None,
+        "atr": round(atr, 6) if atr else None,
+        "swing_high": round(swing_high, 5 if "JPY" not in symbol else 3) if swing_high else None,
+        "swing_low": round(swing_low, 5 if "JPY" not in symbol else 3) if swing_low else None,
+        "dist_ema21_pct": dist_ema_pct,
+        "suggested_entry_style": (
+            "pullback"
+            if trend in ("overbought", "oversold")
+            else ("market" if trend in ("bullish", "bearish") else "pullback")
+        ),
     }
 
 
@@ -176,6 +212,27 @@ async def build_market_brief(
             "max_stake_usd_ceiling": float(getattr(settings, "PLAN_MAX_STAKE_USD_CEILING", 50.0)),
             "min_strategy_win_rate": float(getattr(settings, "STRATEGY_MIN_WIN_RATE", 0.70)) * 100,
             "pattern_strategy_ids": list(PATTERN_STRATEGY_IDS),
+            "execution_model": "cursor_owns_analysis",
+            "max_trades_today_cap": 4,
+            "entry_styles": ["market", "pullback"],
+            "required_plan_fields": [
+                "trade_mode=bias",
+                "directional_bias",
+                "pairs",
+                "sl_pips",
+                "tp_pips",
+                "max_trades_today",
+                "entry_style",
+                "review",
+                "setups",
+            ],
+            "bot_role": "execute_only",
         },
+        "cursor_instructions": (
+            "You own the full trade decision: news thesis, chart levels from pair "
+            "snapshots (ema21/atr/swings), when to enter, and how far to go today. "
+            "Post setups with direction, entry_style, sl/tp, and a written review. "
+            "The VPS bot only opens MULTUP/MULTDOWN — it does not re-decide direction."
+        ),
         "bot": status_bits,
     }

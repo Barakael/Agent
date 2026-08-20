@@ -14,6 +14,13 @@ ALLOWED_STRATEGIES = set(ALL_STRATEGY_IDS) | set(STRATEGY_ALIASES.keys())
 ALLOWED_PATTERN_STRATEGIES = set(PATTERN_STRATEGY_IDS) | {
     k for k, v in STRATEGY_ALIASES.items() if v in PATTERN_STRATEGY_IDS
 }
+ALLOWED_MAJORS = {
+    "frxEURUSD",
+    "frxGBPUSD",
+    "frxUSDJPY",
+    "frxAUDUSD",
+    "frxUSDCAD",
+}
 SL_MIN, SL_MAX = 5, 50
 TP_MIN, TP_MAX = 10, 100
 SWING_SL_MAX = 80
@@ -28,11 +35,55 @@ def _stake_ceiling() -> float:
     return float(getattr(settings, "PLAN_MAX_STAKE_USD_CEILING", 50.0))
 
 
+class PlanSetup(BaseModel):
+    """One Cursor-directed trade the VPS bot may execute."""
+
+    symbol: str
+    direction: str  # buy | sell
+    entry_style: str = "pullback"  # market | pullback
+    entry_price: Optional[float] = None
+    sl_pips: Optional[int] = None
+    tp_pips: Optional[int] = None
+    rationale: str = ""
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_symbol(cls, v: str) -> str:
+        v = v.strip()
+        if v not in ALLOWED_MAJORS:
+            raise ValueError(f"setup symbol must be one of {sorted(ALLOWED_MAJORS)}")
+        return v
+
+    @field_validator("direction")
+    @classmethod
+    def validate_direction(cls, v: str) -> str:
+        v = v.lower()
+        if v not in {"buy", "sell"}:
+            raise ValueError("setup direction must be buy or sell")
+        return v
+
+    @field_validator("entry_style")
+    @classmethod
+    def validate_entry_style(cls, v: str) -> str:
+        v = v.lower()
+        if v not in {"market", "pullback"}:
+            raise ValueError("entry_style must be market or pullback")
+        return v
+
+
 class DailyPlan(BaseModel):
     date: str = Field(..., description="UTC date YYYY-MM-DD")
     pairs: list[str] = Field(..., min_length=1)
     strategy_id: str = "momentum"
-    enabled_strategies: list[str] = Field(default_factory=lambda: ["momentum", "trend_following", "range_trading", "breakout", "price_action"])
+    enabled_strategies: list[str] = Field(
+        default_factory=lambda: [
+            "momentum",
+            "trend_following",
+            "range_trading",
+            "breakout",
+            "price_action",
+        ]
+    )
     trade_mode: str = "pattern"  # pattern | bias
     directional_bias: str = "neutral"  # buy | sell | neutral
     hold_policy: str = "intraday"  # intraday | swing
@@ -44,6 +95,13 @@ class DailyPlan(BaseModel):
     confidence: int = Field(default=50, ge=0, le=100)
     notes: str = ""
     source: str = "cursor-automation"
+    # Cursor owns analysis; bot only executes when execution_mode=cursor_execute
+    execution_mode: str = "cursor_execute"  # cursor_execute | chart_confirm
+    max_trades_today: int = Field(default=3, ge=0, le=4)
+    entry_style: str = "pullback"
+    review: str = ""
+    avoid_until_utc: Optional[str] = None
+    setups: list[PlanSetup] = Field(default_factory=list)
 
     @field_validator("date")
     @classmethod
@@ -75,6 +133,22 @@ class DailyPlan(BaseModel):
             raise ValueError("hold_policy must be intraday or swing")
         return v
 
+    @field_validator("execution_mode")
+    @classmethod
+    def validate_execution_mode(cls, v: str) -> str:
+        v = v.lower()
+        if v not in {"cursor_execute", "chart_confirm"}:
+            raise ValueError("execution_mode must be cursor_execute or chart_confirm")
+        return v
+
+    @field_validator("entry_style")
+    @classmethod
+    def validate_plan_entry_style(cls, v: str) -> str:
+        v = v.lower()
+        if v not in {"market", "pullback"}:
+            raise ValueError("entry_style must be market or pullback")
+        return v
+
     @field_validator("strategy_id")
     @classmethod
     def validate_strategy(cls, v: str) -> str:
@@ -92,7 +166,6 @@ class DailyPlan(BaseModel):
         bad = [s for s in cleaned if s not in ALLOWED_PATTERN_STRATEGIES and s != "bias_swing"]
         if bad:
             raise ValueError(f"unknown strategies: {bad}")
-        # Deduplicate
         seen: set[str] = set()
         uniq: list[str] = []
         for s in cleaned:
@@ -106,13 +179,15 @@ class DailyPlan(BaseModel):
     @field_validator("pairs")
     @classmethod
     def validate_pairs(cls, v: list[str]) -> list[str]:
-        allow = set(settings.pairs_list)
+        allow = set(settings.pairs_list) | ALLOWED_MAJORS
         cleaned = [p.strip() for p in v if p.strip()]
         if not cleaned:
             raise ValueError("pairs must not be empty")
         bad = [p for p in cleaned if p not in allow]
         if bad:
             raise ValueError(f"pairs not in allowlist: {bad}; allowed={sorted(allow)}")
+        if len(cleaned) > 3:
+            cleaned = cleaned[:3]
         return cleaned
 
     @model_validator(mode="after")
@@ -135,9 +210,18 @@ class DailyPlan(BaseModel):
         ceiling = _stake_ceiling()
         if self.max_stake_usd > ceiling:
             object.__setattr__(self, "max_stake_usd", ceiling)
+
+        src = (self.source or "").lower()
+        if src.startswith("cursor"):
+            object.__setattr__(self, "execution_mode", "cursor_execute")
+
         if self.trade_mode == "bias":
-            object.__setattr__(self, "hold_policy", "swing" if self.hold_policy == "intraday" else self.hold_policy)
-            if self.directional_bias == "neutral":
+            object.__setattr__(
+                self,
+                "hold_policy",
+                "swing" if self.hold_policy == "intraday" else self.hold_policy,
+            )
+            if self.directional_bias == "neutral" and self.max_trades_today > 0:
                 raise ValueError("directional_bias required for bias trade_mode")
             object.__setattr__(self, "enabled_strategies", ["bias_swing"])
             object.__setattr__(self, "strategy_id", "bias_swing")
@@ -148,8 +232,19 @@ class DailyPlan(BaseModel):
                 [s for s in self.enabled_strategies if s != "bias_swing"] or ["momentum"],
             )
         if self.strategy_id not in self.enabled_strategies and self.trade_mode == "pattern":
-            # keep primary strategy_id as first enabled
             object.__setattr__(self, "strategy_id", self.enabled_strategies[0])
+
+        clamped_setups: list[PlanSetup] = []
+        for s in self.setups:
+            sl = s.sl_pips if s.sl_pips is not None else self.sl_pips
+            tp = s.tp_pips if s.tp_pips is not None else self.tp_pips
+            sl = max(SL_MIN, min(int(sl), sl_max))
+            tp = max(TP_MIN, min(int(tp), tp_max))
+            if tp < sl:
+                tp = sl
+            clamped_setups.append(s.model_copy(update={"sl_pips": sl, "tp_pips": tp}))
+        if clamped_setups:
+            object.__setattr__(self, "setups", clamped_setups)
         return self
 
     def to_dict(self) -> dict[str, Any]:
@@ -162,6 +257,16 @@ class DailyPlan(BaseModel):
     @property
     def is_swing(self) -> bool:
         return self.hold_policy == "swing" or self.trade_mode == "bias"
+
+    @property
+    def is_cursor_execute(self) -> bool:
+        thesis = self.directional_bias in {"buy", "sell"} or bool(self.setups)
+        return (
+            (self.source or "").lower().startswith("cursor")
+            and self.execution_mode == "cursor_execute"
+            and self.max_trades_today > 0
+            and thesis
+        )
 
 
 def clamp_plan_dict(raw: dict[str, Any]) -> DailyPlan:

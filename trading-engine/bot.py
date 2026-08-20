@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from alerts.telegram import TelegramAlerter
@@ -104,6 +105,8 @@ class TradingBot:
         self._projection: dict[str, HorizonProjection] = {}
         self._allowed_multipliers: dict[str, list[float]] = {}
         self.plan_store = plan_store
+        self._cursor_filled_symbols: set[str] = set()
+        self._cursor_fill_day: str | None = None
 
     def get_active_plan(self) -> Optional[DailyPlan]:
         plan = self.plan_store.load()
@@ -583,11 +586,214 @@ class TradingBot:
 
         await self._risk_and_execute(symbol, signal, df, plan)
 
+    def _reset_cursor_fills_if_new_day(self) -> None:
+        today = datetime.now(timezone.utc).date().isoformat()
+        if self._cursor_fill_day != today:
+            self._cursor_fill_day = today
+            self._cursor_filled_symbols.clear()
+
+    def _cursor_setup_for(self, plan: DailyPlan, symbol: str):
+        for s in plan.setups or []:
+            if s.symbol == symbol:
+                return s
+        return None
+
+    def _near_ema21_pullback(self, df, direction: SignalDirection, price: float) -> bool:
+        """Light timing only: price near EMA21 for pullback entries Cursor already approved."""
+        if len(df) < 21 or "close" not in df.columns:
+            return True
+        ema = float(df["close"].ewm(span=21, adjust=False).mean().iloc[-1])
+        if ema <= 0:
+            return True
+        dist = abs(price - ema) / ema
+        # Within 0.12% of EMA21 counts as pullback zone on majors
+        return dist <= 0.0012
+
+    async def _execute_cursor_directed(
+        self, symbol: str, df, plan: DailyPlan, price: float, epoch: int
+    ) -> None:
+        """Bot only executes: news+chart thesis already decided by Cursor Automation."""
+        self._reset_cursor_fills_if_new_day()
+
+        if symbol not in (plan.pairs or []):
+            self._record_analysis(
+                symbol,
+                price=price,
+                regime="cursor_plan",
+                rsi=0.0,
+                atr=0.0,
+                epoch=epoch,
+                bars=len(df),
+                best_strategy="cursor_execute",
+                confidence=float(plan.confidence),
+                skip_reason="symbol_not_in_plan",
+                signal_direction=None,
+                pipeline="cursor_execute",
+                gates={"passed": [], "failed": ["symbol_not_in_plan"]},
+            )
+            return
+
+        if plan.avoid_until_utc:
+            try:
+                avoid = datetime.fromisoformat(plan.avoid_until_utc.replace("Z", "+00:00"))
+                if datetime.now(timezone.utc) < avoid:
+                    self._record_analysis(
+                        symbol,
+                        price=price,
+                        regime="cursor_plan",
+                        rsi=0.0,
+                        atr=0.0,
+                        epoch=epoch,
+                        bars=len(df),
+                        best_strategy="cursor_execute",
+                        confidence=float(plan.confidence),
+                        skip_reason="cursor_avoid_until",
+                        signal_direction=None,
+                        pipeline="cursor_execute",
+                        gates={"passed": [], "failed": ["cursor_avoid_until"]},
+                    )
+                    return
+            except Exception:
+                pass
+
+        trades_today = int(getattr(self.risk, "_trades_today", 0) or 0)
+        if trades_today >= int(plan.max_trades_today):
+            self._record_analysis(
+                symbol,
+                price=price,
+                regime="cursor_plan",
+                rsi=0.0,
+                atr=0.0,
+                epoch=epoch,
+                bars=len(df),
+                best_strategy="cursor_execute",
+                confidence=float(plan.confidence),
+                skip_reason="cursor_max_trades",
+                signal_direction=None,
+                pipeline="cursor_execute",
+                gates={"passed": [], "failed": ["cursor_max_trades"]},
+            )
+            return
+
+        if symbol in self._cursor_filled_symbols:
+            return
+
+        setup = self._cursor_setup_for(plan, symbol)
+        if setup is not None:
+            direction = SignalDirection.BUY if setup.direction == "buy" else SignalDirection.SELL
+            entry_style = setup.entry_style or plan.entry_style
+            sl_pips = setup.sl_pips or plan.sl_pips
+            tp_pips = setup.tp_pips or plan.tp_pips
+            rationale = setup.rationale or plan.notes or plan.review
+        else:
+            if plan.directional_bias not in {"buy", "sell"}:
+                return
+            direction = (
+                SignalDirection.BUY if plan.directional_bias == "buy" else SignalDirection.SELL
+            )
+            entry_style = plan.entry_style or "pullback"
+            sl_pips = plan.sl_pips
+            tp_pips = plan.tp_pips
+            rationale = plan.review or plan.notes
+
+        if entry_style == "pullback" and not self._near_ema21_pullback(df, direction, price):
+            self._record_analysis(
+                symbol,
+                price=price,
+                regime="cursor_plan",
+                rsi=0.0,
+                atr=0.0,
+                epoch=epoch,
+                bars=len(df),
+                best_strategy="cursor_execute",
+                confidence=float(plan.confidence),
+                skip_reason="awaiting_pullback_ema21",
+                signal_direction=direction.value,
+                pipeline="cursor_execute",
+                gates={"passed": ["cursor_thesis"], "failed": ["awaiting_pullback_ema21"]},
+            )
+            return
+
+        # Price levels from plan pips via RiskGate helpers
+        pip = self.risk._pip_size(symbol)
+        if direction == SignalDirection.BUY:
+            sl = price - sl_pips * pip
+            tp = price + tp_pips * pip
+        else:
+            sl = price + sl_pips * pip
+            tp = price - tp_pips * pip
+
+        signal = make_signal(
+            strategy_id="cursor_execute",
+            symbol=symbol,
+            direction=direction,
+            price=price,
+            epoch=epoch,
+            reason=f"cursor_execute {direction.value}: {(rationale or '')[:240]}",
+            rsi=0.0,
+            macd=0.0,
+            trade_mode="bias",
+            hold_policy=plan.hold_policy or "swing",
+            confidence=float(plan.confidence or 0) / 100.0,
+            market_condition="cursor_plan",
+            score_breakdown={
+                "pipeline": "cursor_execute",
+                "entry_style": entry_style,
+                "max_trades_today": plan.max_trades_today,
+                "review": (plan.review or "")[:500],
+            },
+            suggested_sl=sl,
+            suggested_tp=tp,
+            sl_tp_method="cursor_plan_pips",
+            bias_id=f"cursor-{plan.date}-{symbol}",
+            feature_json={"review": plan.review, "notes": plan.notes},
+            gates={"passed": ["cursor_thesis", f"entry:{entry_style}"], "failed": []},
+        )
+
+        self._record_analysis(
+            symbol,
+            price=price,
+            regime="cursor_plan",
+            rsi=0.0,
+            atr=0.0,
+            epoch=epoch,
+            bars=len(df),
+            best_strategy="cursor_execute",
+            confidence=float(plan.confidence),
+            skip_reason=None,
+            signal_direction=direction.value,
+            pipeline="cursor_execute",
+            gates={"passed": ["cursor_thesis", f"entry:{entry_style}"], "failed": []},
+        )
+
+        # Cap plan.max_trades_today via temporary risk day limit
+        prev_max = self.risk.max_trades_per_day
+        try:
+            self.risk.max_trades_per_day = int(plan.max_trades_today)
+            opened = await self._risk_and_execute(symbol, signal, df, plan)
+        finally:
+            self.risk.max_trades_per_day = prev_max
+
+        if opened:
+            self._cursor_filled_symbols.add(symbol)
+            logger.info(
+                "Cursor-directed fill %s %s (style=%s trades_cap=%s)",
+                direction.value,
+                symbol,
+                entry_style,
+                plan.max_trades_today,
+            )
+
     async def _on_bias_pipeline_candle(self, symbol: str, df, plan) -> None:
-        """R_50 path: 24h regime + 6h bias every 5m; entry only on 1h close."""
+        """Cursor-directed execute, or legacy 24h→6h→1h chart confirm path."""
         bar_minutes = settings.CANDLE_TIMEFRAME_MINUTES
         epoch = int(df["epoch"].iloc[-1]) if len(df) and "epoch" in df.columns else 0
         price = float(df["close"].iloc[-1]) if len(df) else 0.0
+
+        active = self.get_active_plan() or plan
+        if active is not None and getattr(active, "is_cursor_execute", False):
+            await self._execute_cursor_directed(symbol, df, active, price, epoch)
+            return
 
         if len(df) < 60:
             self._record_analysis(
@@ -769,7 +975,7 @@ class TradingBot:
             )
             return
 
-        # Daily-plan gate: require today's plan and check 6h bias agrees with it.
+        # Daily-plan gate: require today's Cursor Automation plan; charts only time entry.
         active_plan = self.get_active_plan()
         if active_plan is None:
             skip = "no_daily_plan"
@@ -792,6 +998,58 @@ class TradingBot:
                 pipeline="bias_v1",
             )
             return
+
+        plan_source = (getattr(active_plan, "source", "") or "").lower()
+        plan_notes = (getattr(active_plan, "notes", "") or "")
+        if (
+            not plan_source.startswith("cursor")
+            or "awaiting_cursor_plan" in plan_notes
+            or "Fallback bias" in plan_notes
+        ):
+            skip = "no_cursor_plan"
+            gates["failed"] = list(dict.fromkeys(gates["failed"] + [skip]))
+            self._record_analysis(
+                symbol,
+                price=price,
+                regime=regime.label,
+                rsi=bias.rsi,
+                atr=bias.atr_6h,
+                epoch=epoch,
+                bars=len(df),
+                best_strategy="bias_pipeline",
+                confidence=None,
+                skip_reason=skip,
+                signal_direction=None,
+                bias=bias.direction,
+                bias_id=bias.bias_id,
+                gates=gates,
+                pipeline="bias_v1",
+            )
+            return
+
+        plan_pairs = list(getattr(active_plan, "pairs", None) or [])
+        if plan_pairs and symbol not in plan_pairs:
+            skip = "symbol_not_in_plan"
+            gates["failed"] = list(dict.fromkeys(gates["failed"] + [skip]))
+            self._record_analysis(
+                symbol,
+                price=price,
+                regime=regime.label,
+                rsi=bias.rsi,
+                atr=bias.atr_6h,
+                epoch=epoch,
+                bars=len(df),
+                best_strategy="bias_pipeline",
+                confidence=None,
+                skip_reason=skip,
+                signal_direction=None,
+                bias=bias.direction,
+                bias_id=bias.bias_id,
+                gates=gates,
+                pipeline="bias_v1",
+            )
+            return
+
         plan_dir = (active_plan.directional_bias or "neutral").lower()
         bias_dir = (bias.direction or "").upper()
         plan_conflict = False
@@ -908,6 +1166,7 @@ class TradingBot:
         if not confirm.ok:
             skip = "confirm_failed:" + (",".join(confirm.gates_failed) or "none")
             self._record_analysis(
+
                 symbol,
                 price=price,
                 regime=regime.label,

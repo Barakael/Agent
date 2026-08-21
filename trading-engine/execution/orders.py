@@ -156,6 +156,34 @@ class OrderExecutor:
                 raise UnencodableStop(detail)
             logger.warning("Stop exceeds contract room — %s", detail)
 
+        # Cost calibration shrinks dollar TP vs SL. Widen the chart TP so the
+        # posted dollar RR still meets MIN_DOLLAR_RR (Cursor pip RR of 2.0 was
+        # landing ~1.28–1.33 after fit and never filling).
+        if usd_sl > 0 and usd_tp < MIN_DOLLAR_RR * usd_sl:
+            needed_usd_tp = MIN_DOLLAR_RR * usd_sl
+            entry = float(signal.price)
+            if calibration is not None:
+                needed_pct = calibration.target_pct_for_usd(needed_usd_tp)
+            else:
+                needed_pct = needed_usd_tp / max(float(risk.stake) * mult, 1e-9)
+            if needed_pct > 0 and entry > 0:
+                if signal.direction == SignalDirection.BUY:
+                    risk.take_profit_price = entry * (1.0 + needed_pct)
+                else:
+                    risk.take_profit_price = entry * (1.0 - needed_pct)
+                risk.sl_tp_method = f"{risk.sl_tp_method}+rr_widen"
+                barriers = barriers_from_risk(
+                    risk, entry, calibration=calibration
+                )
+                usd_sl, usd_tp = barriers.usd_sl, barriers.usd_tp
+                logger.info(
+                    "Widened TP for %s to meet dollar RR>=%.1f (usd_tp=%.2f usd_sl=%.2f)",
+                    signal.symbol,
+                    MIN_DOLLAR_RR,
+                    usd_tp,
+                    usd_sl,
+                )
+
         if usd_sl > 0 and usd_tp < MIN_DOLLAR_RR * usd_sl:
             detail = (
                 f"{signal.symbol} dollar RR {usd_tp:.2f}/{usd_sl:.2f}="

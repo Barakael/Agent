@@ -357,6 +357,23 @@ async def run_backtest(auth: bool = Depends(validate_api_key)):
     return {"data": results}
 
 
+class PlanChecklistRequest(BaseModel):
+    news_chart_aligned: bool = False
+    structure_aligned: bool = False
+    not_chasing: bool = False
+    rsi_ok: bool = False
+    event_ok: bool = True
+
+
+class PlanAnalysisRequest(BaseModel):
+    news_thesis: str = ""
+    structure_bias: str = ""
+    currency_board: dict[str, str] | None = None
+    invalidation: str = ""
+    prefer_symbol_order: list[str] | None = None
+    checklist: PlanChecklistRequest | None = None
+
+
 class PlanSetupRequest(BaseModel):
     symbol: str
     direction: str
@@ -364,6 +381,7 @@ class PlanSetupRequest(BaseModel):
     entry_price: float | None = None
     sl_pips: int | None = None
     tp_pips: int | None = None
+    priority: int = 1
     rationale: str = ""
 
 
@@ -389,6 +407,7 @@ class DailyPlanRequest(BaseModel):
     review: str = ""
     avoid_until_utc: str | None = None
     setups: list[PlanSetupRequest] | None = None
+    analysis: PlanAnalysisRequest | None = None
 
 
 @app.get("/plan/active")

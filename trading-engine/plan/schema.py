@@ -1,4 +1,4 @@
-"""Daily trading plan schema with hard clamps."""
+"""Daily trading plan schema with hard clamps and news+chart ALIGN checklist."""
 
 from __future__ import annotations
 
@@ -35,6 +35,32 @@ def _stake_ceiling() -> float:
     return float(getattr(settings, "PLAN_MAX_STAKE_USD_CEILING", 50.0))
 
 
+class PlanChecklist(BaseModel):
+    news_chart_aligned: bool = False
+    structure_aligned: bool = False
+    not_chasing: bool = False
+    rsi_ok: bool = False
+    event_ok: bool = True
+
+
+class PlanAnalysis(BaseModel):
+    news_thesis: str = ""
+    structure_bias: str = ""
+    currency_board: dict[str, str] = Field(default_factory=dict)
+    invalidation: str = ""
+    prefer_symbol_order: list[str] = Field(default_factory=list)
+    checklist: PlanChecklist = Field(default_factory=PlanChecklist)
+
+    @field_validator("prefer_symbol_order")
+    @classmethod
+    def validate_prefer(cls, v: list[str]) -> list[str]:
+        cleaned = [p.strip() for p in v if p and p.strip()]
+        bad = [p for p in cleaned if p not in ALLOWED_MAJORS]
+        if bad:
+            raise ValueError(f"prefer_symbol_order not in allowlist: {bad}")
+        return cleaned[:5]
+
+
 class PlanSetup(BaseModel):
     """One Cursor-directed trade the VPS bot may execute."""
 
@@ -44,6 +70,7 @@ class PlanSetup(BaseModel):
     entry_price: Optional[float] = None
     sl_pips: Optional[int] = None
     tp_pips: Optional[int] = None
+    priority: int = Field(default=1, ge=1, le=10)
     rationale: str = ""
 
     @field_validator("symbol")
@@ -95,13 +122,13 @@ class DailyPlan(BaseModel):
     confidence: int = Field(default=50, ge=0, le=100)
     notes: str = ""
     source: str = "cursor-automation"
-    # Cursor owns analysis; bot only executes when execution_mode=cursor_execute
     execution_mode: str = "cursor_execute"  # cursor_execute | chart_confirm
     max_trades_today: int = Field(default=3, ge=0, le=4)
     entry_style: str = "pullback"
     review: str = ""
     avoid_until_utc: Optional[str] = None
     setups: list[PlanSetup] = Field(default_factory=list)
+    analysis: Optional[PlanAnalysis] = None
 
     @field_validator("date")
     @classmethod
@@ -245,6 +272,35 @@ class DailyPlan(BaseModel):
             clamped_setups.append(s.model_copy(update={"sl_pips": sl, "tp_pips": tp}))
         if clamped_setups:
             object.__setattr__(self, "setups", clamped_setups)
+
+        # Hard ALIGN gate for cursor execute buys/sells
+        wants_execute = (
+            src.startswith("cursor")
+            and self.execution_mode == "cursor_execute"
+            and self.max_trades_today > 0
+            and self.directional_bias in {"buy", "sell"}
+        )
+        if wants_execute:
+            if self.analysis is None:
+                raise ValueError(
+                    "analysis.checklist required for cursor_execute bias plans "
+                    "(news_chart_aligned must be true)"
+                )
+            cl = self.analysis.checklist
+            required = (
+                cl.news_chart_aligned
+                and cl.structure_aligned
+                and cl.not_chasing
+                and cl.rsi_ok
+                and cl.event_ok
+            )
+            if not required:
+                raise ValueError(
+                    "ALIGN gate failed: analysis.checklist must have "
+                    "news_chart_aligned, structure_aligned, not_chasing, rsi_ok, event_ok all true "
+                    "(or set max_trades_today=0 to stand aside)"
+                )
+
         return self
 
     def to_dict(self) -> dict[str, Any]:
@@ -261,12 +317,31 @@ class DailyPlan(BaseModel):
     @property
     def is_cursor_execute(self) -> bool:
         thesis = self.directional_bias in {"buy", "sell"} or bool(self.setups)
+        aligned = True
+        if self.analysis is not None:
+            cl = self.analysis.checklist
+            aligned = (
+                cl.news_chart_aligned
+                and cl.structure_aligned
+                and cl.not_chasing
+                and cl.rsi_ok
+                and cl.event_ok
+            )
         return (
             (self.source or "").lower().startswith("cursor")
             and self.execution_mode == "cursor_execute"
             and self.max_trades_today > 0
             and thesis
+            and aligned
         )
+
+    def prefer_order(self) -> list[str]:
+        if self.analysis and self.analysis.prefer_symbol_order:
+            return list(self.analysis.prefer_symbol_order)
+        setups = sorted(self.setups or [], key=lambda s: int(s.priority or 1))
+        if setups:
+            return [s.symbol for s in setups]
+        return list(self.pairs or [])
 
 
 def clamp_plan_dict(raw: dict[str, Any]) -> DailyPlan:

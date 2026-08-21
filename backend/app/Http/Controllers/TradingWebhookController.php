@@ -81,6 +81,12 @@ class TradingWebhookController extends Controller
                 'latest_ai_decision' => $decision,
                 'market_brief' => $marketBrief,
                 'allowlist_pairs' => ['frxEURUSD', 'frxGBPUSD', 'frxUSDJPY', 'frxAUDUSD', 'frxUSDCAD'],
+                'schedule' => [
+                    'runs_utc' => ['06:30', '12:00', '16:00'],
+                    'days' => 'mon-fri',
+                    'tz' => 'UTC',
+                    'note' => 'FX closed Fri 20:55–Sun 21:05 UTC — do not trade or replace the plan on weekends',
+                ],
                 'strategy_win_rates' => $status['strategy_win_rates'] ?? [],
                 'armed_strategies' => $status['armed_strategies'] ?? [],
                 'clamps' => [
@@ -94,6 +100,7 @@ class TradingWebhookController extends Controller
                     'max_trades_today' => [0, 4],
                     'entry_styles' => ['market', 'pullback'],
                     'execution_modes' => ['cursor_execute', 'chart_confirm'],
+                    'hard_gate' => 'news_chart_aligned',
                     'strategy_ids' => self::STRATEGY_IDS,
                     'trade_modes' => ['pattern', 'bias'],
                     'hold_policies' => ['intraday', 'swing'],
@@ -136,7 +143,21 @@ class TradingWebhookController extends Controller
             'setups.*.entry_price' => 'sometimes|nullable|numeric',
             'setups.*.sl_pips' => 'sometimes|nullable|integer|min:5|max:80',
             'setups.*.tp_pips' => 'sometimes|nullable|integer|min:10|max:200',
+            'setups.*.priority' => 'sometimes|integer|min:1|max:10',
             'setups.*.rationale' => 'sometimes|string|max:1000',
+            'analysis' => 'sometimes|array',
+            'analysis.news_thesis' => 'sometimes|string|max:1000',
+            'analysis.structure_bias' => 'sometimes|string|max:500',
+            'analysis.currency_board' => 'sometimes|array',
+            'analysis.invalidation' => 'sometimes|string|max:1000',
+            'analysis.prefer_symbol_order' => 'sometimes|array|max:5',
+            'analysis.prefer_symbol_order.*' => 'string|in:frxEURUSD,frxGBPUSD,frxUSDJPY,frxAUDUSD,frxUSDCAD',
+            'analysis.checklist' => 'sometimes|array',
+            'analysis.checklist.news_chart_aligned' => 'sometimes|boolean',
+            'analysis.checklist.structure_aligned' => 'sometimes|boolean',
+            'analysis.checklist.not_chasing' => 'sometimes|boolean',
+            'analysis.checklist.rsi_ok' => 'sometimes|boolean',
+            'analysis.checklist.event_ok' => 'sometimes|boolean',
         ]);
 
         if ($validator->fails()) {
@@ -172,9 +193,29 @@ class TradingWebhookController extends Controller
         $data['review'] = $data['review'] ?? '';
         $data['avoid_until_utc'] = $data['avoid_until_utc'] ?? null;
         $data['setups'] = $data['setups'] ?? [];
+        $data['analysis'] = $data['analysis'] ?? null;
 
         if ($data['trade_mode'] === 'bias' && ($data['directional_bias'] ?? 'neutral') === 'neutral') {
             return response()->json(['message' => 'directional_bias required for bias trade_mode'], 422);
+        }
+
+        $wantsExecute = ($data['max_trades_today'] ?? 0) > 0
+            && in_array($data['directional_bias'] ?? 'neutral', ['buy', 'sell'], true)
+            && str_starts_with(strtolower((string) $data['source']), 'cursor');
+        if ($wantsExecute) {
+            $cl = is_array($data['analysis'] ?? null) ? ($data['analysis']['checklist'] ?? null) : null;
+            $eventOk = is_array($cl) ? ($cl['event_ok'] ?? true) : false;
+            $ok = is_array($cl)
+                && ! empty($cl['news_chart_aligned'])
+                && ! empty($cl['structure_aligned'])
+                && ! empty($cl['not_chasing'])
+                && ! empty($cl['rsi_ok'])
+                && $eventOk;
+            if (! $ok) {
+                return response()->json([
+                    'message' => 'ALIGN gate failed: analysis.checklist must have news_chart_aligned, structure_aligned, not_chasing, rsi_ok, event_ok all true (or max_trades_today=0)',
+                ], 422);
+            }
         }
 
         $slMax = ($data['hold_policy'] === 'swing' || $data['trade_mode'] === 'bias') ? 80 : 50;

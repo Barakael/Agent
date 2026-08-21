@@ -89,6 +89,8 @@ class TradingBot:
         self.telegram = TelegramAlerter()
         self.feature_store = FeatureStore(self.journal.Session)
         self._running = False
+        self._starting = False
+        self._start_lock = asyncio.Lock()
         self._paused = False
         self._task: Optional[asyncio.Task] = None
         self._feed_task: Optional[asyncio.Task] = None
@@ -1651,6 +1653,16 @@ class TradingBot:
                 await self.client.disconnect()
 
     async def start(self) -> None:
+        async with self._start_lock:
+            if self._running or self._starting:
+                return
+            self._starting = True
+            try:
+                await self._start_unlocked()
+            finally:
+                self._starting = False
+
+    async def _start_unlocked(self) -> None:
         if self._running:
             return
 
@@ -1690,18 +1702,25 @@ class TradingBot:
             await self._verify_multiplier()
 
         await self.calendar.refresh()
-        if settings.NUMBER_ENGINE_EXECUTION:
+        # Cursor Automation owns ALIGN — do not block the loop on slow backtest preflight.
+        active = self.get_active_plan()
+        if active is not None and getattr(active, "is_cursor_execute", False):
+            self.analysis.analysis_armed = True
+            logger.info("Skipping heavy preflight — cursor_execute plan owns the day")
+        elif settings.NUMBER_ENGINE_EXECUTION:
             # Arm immediately so UI/status are not blocked while preflight backtests run
             self.analysis.analysis_armed = True
-        try:
-            await self.run_preflight()
-        except Exception:
-            if settings.NUMBER_ENGINE_EXECUTION:
+            try:
+                await self.run_preflight()
+            except Exception:
                 logger.exception(
                     "Preflight failed on start — continuing Number Engine loop anyway"
                 )
                 self.analysis.analysis_armed = True
-            else:
+        else:
+            try:
+                await self.run_preflight()
+            except Exception:
                 logger.exception("Preflight failed on start — bot will not arm")
 
         # Only reconnect when the socket is actually dead — do not tear down a healthy OTP session.

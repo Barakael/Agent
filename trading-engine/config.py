@@ -149,6 +149,10 @@ class Settings(BaseSettings):
     RISK_PERCENT_PER_TRADE: float = float(os.getenv("RISK_PERCENT_PER_TRADE", "1.5"))
     # Demo: fixed USD stake. Live: balance × RISK_PERCENT_PER_TRADE
     DEMO_FIXED_STAKE_USD: float = float(os.getenv("DEMO_FIXED_STAKE_USD", "100"))
+    # Daily kill switch (drawdown / profit caps). Off: Cursor plan + timing own the day.
+    DAILY_KILL_SWITCH_ENABLED: bool = (
+        os.getenv("DAILY_KILL_SWITCH_ENABLED", "false").lower() == "true"
+    )
     DAILY_DRAWDOWN_LIMIT_PERCENT: float = float(
         os.getenv("DAILY_DRAWDOWN_LIMIT_PERCENT", "4.0")
     )

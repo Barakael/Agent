@@ -16,6 +16,13 @@ class TradingEveningReviewCommand extends Command
 
     public function handle(TradingService $trading): int
     {
+        // Default run is weekday-only; --date still allowed for backfill.
+        if (! $this->option('date') && now('UTC')->isWeekend()) {
+            $this->info('Weekend — skipping FX evening review');
+
+            return self::SUCCESS;
+        }
+
         $day = $this->option('date') ?: now('UTC')->toDateString();
 
         try {

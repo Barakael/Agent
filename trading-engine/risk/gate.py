@@ -102,6 +102,9 @@ class RiskGate:
 
     def __init__(self) -> None:
         self.risk_percent = settings.RISK_PERCENT_PER_TRADE
+        self.kill_switch_enabled = bool(
+            getattr(settings, "DAILY_KILL_SWITCH_ENABLED", False)
+        )
         self.daily_limit_percent = settings.DAILY_DRAWDOWN_LIMIT_PERCENT
         self.max_daily_profit_percent = settings.MAX_DAILY_PROFIT_PERCENT
         self.max_trades_per_day = settings.MAX_TRADES_PER_DAY
@@ -136,31 +139,36 @@ class RiskGate:
     def record_pnl(self, pnl: float) -> None:
         self._roll_day_if_needed()
         self._daily_pnl += pnl
-        if self._session_start_balance > 0:
-            drawdown_pct = abs(min(0, self._daily_pnl)) / self._session_start_balance * 100
-            if drawdown_pct >= self.daily_limit_percent:
-                self._kill_switch_active = True
-                logger.warning(
-                    "Daily kill switch triggered: drawdown %.2f%% >= %.2f%%",
-                    drawdown_pct,
-                    self.daily_limit_percent,
-                )
-            profit_pct = max(0, self._daily_pnl) / self._session_start_balance * 100
-            if profit_pct >= self.max_daily_profit_percent:
-                self._kill_switch_active = True
-                logger.warning(
-                    "Daily profit cap reached: %.2f%% >= %.2f%% — stopping new trades",
-                    profit_pct,
-                    self.max_daily_profit_percent,
-                )
+        if not self.kill_switch_enabled or self._session_start_balance <= 0:
+            return
+        drawdown_pct = abs(min(0, self._daily_pnl)) / self._session_start_balance * 100
+        if drawdown_pct >= self.daily_limit_percent:
+            self._kill_switch_active = True
+            logger.warning(
+                "Daily kill switch triggered: drawdown %.2f%% >= %.2f%%",
+                drawdown_pct,
+                self.daily_limit_percent,
+            )
+        profit_pct = max(0, self._daily_pnl) / self._session_start_balance * 100
+        if profit_pct >= self.max_daily_profit_percent:
+            self._kill_switch_active = True
+            logger.warning(
+                "Daily profit cap reached: %.2f%% >= %.2f%% — stopping new trades",
+                profit_pct,
+                self.max_daily_profit_percent,
+            )
 
     def trigger_kill_switch(self, reason: str = "manual") -> None:
+        if not self.kill_switch_enabled:
+            logger.info("Kill switch disabled — ignoring trigger (%s)", reason)
+            self._kill_switch_active = False
+            return
         self._kill_switch_active = True
         logger.warning("Kill switch activated: %s", reason)
 
     @property
     def kill_switch_active(self) -> bool:
-        return self._kill_switch_active
+        return bool(self.kill_switch_enabled and self._kill_switch_active)
 
     @property
     def daily_pnl(self) -> float:
@@ -238,7 +246,7 @@ class RiskGate:
                 reason=f"non_frx_symbol_rejected: {symbol}",
             )
 
-        if self._kill_switch_active:
+        if self.kill_switch_active:
             return RiskCheckResult(
                 decision=RiskDecision.REJECTED,
                 reason="Daily kill switch active",
@@ -264,7 +272,7 @@ class RiskGate:
                 decision=RiskDecision.REJECTED,
                 reason=f"Max trades today ({self.max_trades_per_day}) reached",
             )
-        if self._session_start_balance > 0:
+        if self.kill_switch_enabled and self._session_start_balance > 0:
             profit_pct = max(0, self._daily_pnl) / self._session_start_balance * 100
             if profit_pct >= self.max_daily_profit_percent:
                 return RiskCheckResult(
@@ -324,7 +332,7 @@ class RiskGate:
                 decision=RiskDecision.REJECTED,
                 reason="Invalid stake amount",
             )
-        if self._kill_switch_active:
+        if self.kill_switch_active:
             return RiskCheckResult(
                 decision=RiskDecision.REJECTED,
                 reason="Daily kill switch active",

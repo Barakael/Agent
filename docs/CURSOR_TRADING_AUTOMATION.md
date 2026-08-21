@@ -172,6 +172,8 @@ Do not place Deriv orders, change live mode, or raise clamps. The VPS bot only t
 ## Bot after plan lands
 
 1. Session 09:00–21:00 UTC
-2. `avoid_until_utc`, `max_trades_today`, setup `priority` / `prefer_symbol_order`
-3. ATR pullback + anti-chase timing
-4. RiskGate + RR ≥ 1.5 → MULTUP/MULTDOWN
+2. `avoid_until_utc`, `max_trades_today` (hard caps). Setup `priority` / `prefer_symbol_order` are advisory only — a ready lower-priority pair is not blocked behind one still waiting on timing.
+3. ATR pullback (within ~1.0 ATR of EMA21) + anti-chase timing; use `entry_style: market` when the brief already shows a clean non-chase location
+4. RiskGate → MULTUP/MULTDOWN (daily kill switch off by default)
+
+**Cursor owns the decision.** When `execution_mode=cursor_execute` and ALIGN passed, the legacy ATAE open scenario (`scenario_no_simulated_outcomes`) and preflight arming **do not veto** the trade. The bot only times the entry and enforces risk/session/barriers.

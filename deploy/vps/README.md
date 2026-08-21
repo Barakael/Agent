@@ -84,6 +84,9 @@ systemctl enable --now wayda-backend wayda-ai-agent wayda-trading-engine
 
 Base URL: `https://wayda.co.tz` — see [docs/CURSOR_TRADING_AUTOMATION.md](../../docs/CURSOR_TRADING_AUTOMATION.md)
 
+Cursor Automation schedule (UTC, **Mon–Fri only**): `06:30`, `12:00`, `16:00`.
+Laravel fallback (`trading:daily-analysis`) runs the same weekday slots at `06:50`, `12:00`, `16:00`.
+
 ## Frontend UI sync (SmartSell restyle)
 
 After UI changes, rebuild the SPA against production API and sync `dist` to the nginx root:

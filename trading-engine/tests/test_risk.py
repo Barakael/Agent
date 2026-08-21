@@ -37,13 +37,24 @@ def test_risk_gate_approves_manual_with_sl_tp():
     assert result.decision == RiskDecision.APPROVED
 
 
-def test_daily_kill_switch():
+def test_daily_kill_switch(monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "DAILY_KILL_SWITCH_ENABLED", True)
     gate = RiskGate()
+    gate.kill_switch_enabled = True
     gate.reset_session(10000.0)
     gate.record_pnl(-300.0)  # 3% — below 4% limit
     assert not gate.kill_switch_active
     gate.record_pnl(-100.0)  # 4% total — triggers kill switch
     assert gate.kill_switch_active
+
+
+def test_daily_kill_switch_disabled_by_default():
+    gate = RiskGate()
+    gate.reset_session(10000.0)
+    gate.record_pnl(-500.0)  # 5% — would trip if enabled
+    assert not gate.kill_switch_active
 
 
 def test_stake_calculation_positive():
@@ -96,8 +107,12 @@ def test_unlimited_trades_when_max_zero(monkeypatch):
     assert result.stake == 100.0
 
 
-def test_risk_rejects_when_kill_switch_active():
+def test_risk_rejects_when_kill_switch_active(monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "DAILY_KILL_SWITCH_ENABLED", True)
     gate = RiskGate()
+    gate.kill_switch_enabled = True
     gate.trigger_kill_switch()
     signal = TradeSignal(
         symbol="frxEURUSD",

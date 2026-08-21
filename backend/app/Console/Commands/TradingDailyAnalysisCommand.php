@@ -16,6 +16,13 @@ class TradingDailyAnalysisCommand extends Command
 
     public function handle(TradingService $trading): int
     {
+        // FX majors: closed Fri 20:55–Sun 21:05 UTC. Skip Sat/Sun even if schedule drifts.
+        if (now('UTC')->isWeekend()) {
+            $this->info('Weekend — skipping FX daily analysis (markets closed)');
+
+            return self::SUCCESS;
+        }
+
         try {
             $preflight = [];
             $metrics = [];

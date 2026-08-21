@@ -613,7 +613,11 @@ class TradingBot:
         return float(series.tail(14).mean())
 
     def _near_ema21_pullback(self, df, direction: SignalDirection, price: float) -> bool:
-        """ATR-based pullback: within ~0.5 ATR of EMA21 (not loose % gate)."""
+        """ATR-based pullback near EMA21.
+
+        Cursor owns direction; this only times entry. Allow up to ~1.0 ATR so a
+        valid ALIGN plan is not parked all day on a half-ATR haircut.
+        """
         if len(df) < 21 or "close" not in df.columns:
             return False
         ema = float(df["close"].ewm(span=21, adjust=False).mean().iloc[-1])
@@ -621,12 +625,12 @@ class TradingBot:
         if ema <= 0 or not atr or atr <= 0:
             return False
         dist_atr = abs(price - ema) / atr
-        if dist_atr > 0.5:
+        if dist_atr > 1.0:
             return False
-        # Prefer pullback from the trade side of EMA
-        if direction == SignalDirection.BUY and price > ema * 1.0008:
+        # Soft side check: mild extension past EMA still counts as near
+        if direction == SignalDirection.BUY and price > ema + atr:
             return False
-        if direction == SignalDirection.SELL and price < ema * 0.9992:
+        if direction == SignalDirection.SELL and price < ema - atr:
             return False
         return True
 
@@ -643,21 +647,12 @@ class TradingBot:
         return (price - swing_low) / atr <= 0.35
 
     def _cursor_priority_blocks(self, plan: DailyPlan, symbol: str) -> bool:
-        """True if a higher-priority plan symbol is still unfilled and eligible."""
-        order = plan.prefer_order() if hasattr(plan, "prefer_order") else list(plan.pairs or [])
-        if symbol not in order:
-            # setups may define priority without being first in pairs
-            setups = sorted(plan.setups or [], key=lambda s: int(getattr(s, "priority", 1) or 1))
-            order = [s.symbol for s in setups] or list(plan.pairs or [])
-        if symbol not in order:
-            return False
-        idx = order.index(symbol)
-        for higher in order[:idx]:
-            if higher in self._cursor_filled_symbols:
-                continue
-            # Higher priority still waiting — block this symbol
-            if higher in (plan.pairs or []):
-                return True
+        """Soft prefer only: never park a ready pair behind one still waiting on timing.
+
+        Priority / prefer_symbol_order is advisory. Hard caps are max_trades_today
+        and max_open_positions. Blocking GBPUSD all day because EURUSD awaits EMA
+        pullback prevented Cursor ALIGN plans from filling.
+        """
         return False
 
     async def _execute_cursor_directed(
@@ -1427,7 +1422,16 @@ class TradingBot:
                 cached["signal"] = signal.direction.value
             return False
 
-        if not settings.NUMBER_ENGINE_EXECUTION:
+        # Cursor Automation owns direction/ALIGN. Do not let the legacy ATAE
+        # scenario simulator (scenario_no_simulated_outcomes) veto a cursor plan.
+        # Bot role is timing + risk only.
+        cursor_owned = bool(
+            (plan is not None and getattr(plan, "is_cursor_execute", False))
+            or getattr(signal, "strategy_id", "") == "cursor_execute"
+            or (getattr(signal, "score_breakdown", None) or {}).get("pipeline")
+            == "cursor_execute"
+        )
+        if not settings.NUMBER_ENGINE_EXECUTION and not cursor_owned:
             open_snapshot = self.analysis.evaluate_open(signal, df, risk_result)
             if not open_snapshot.passed:
                 self.journal.log_signal_rejected(signal, "; ".join(open_snapshot.reasons))
@@ -1459,6 +1463,7 @@ class TradingBot:
 
         if (
             not settings.NUMBER_ENGINE_EXECUTION
+            and not cursor_owned
             and settings.ANALYSIS_REQUIRE_PREFLIGHT
             and not self.analysis_armed
         ):

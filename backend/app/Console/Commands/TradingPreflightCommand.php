@@ -14,6 +14,12 @@ class TradingPreflightCommand extends Command
 
     public function handle(TradingService $trading): int
     {
+        if (now('UTC')->isWeekend()) {
+            $this->info('Weekend — skipping FX preflight (markets closed)');
+
+            return self::SUCCESS;
+        }
+
         try {
             $result = $trading->runPreflight();
             $armed = $result['analysis_armed'] ?? false;

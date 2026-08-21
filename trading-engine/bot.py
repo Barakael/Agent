@@ -598,16 +598,67 @@ class TradingBot:
                 return s
         return None
 
+    def _cursor_atr(self, df) -> float | None:
+        if len(df) < 2 or not {"high", "low", "close"}.issubset(df.columns):
+            return None
+        high = df["high"].astype(float)
+        low = df["low"].astype(float)
+        prev_close = df["close"].astype(float).shift(1)
+        tr = (high - low).to_frame("a")
+        tr["b"] = (high - prev_close).abs()
+        tr["c"] = (low - prev_close).abs()
+        series = tr.max(axis=1)
+        if len(series) < 14:
+            return float(series.mean()) if len(series) else None
+        return float(series.tail(14).mean())
+
     def _near_ema21_pullback(self, df, direction: SignalDirection, price: float) -> bool:
-        """Light timing only: price near EMA21 for pullback entries Cursor already approved."""
+        """ATR-based pullback: within ~0.5 ATR of EMA21 (not loose % gate)."""
         if len(df) < 21 or "close" not in df.columns:
-            return True
+            return False
         ema = float(df["close"].ewm(span=21, adjust=False).mean().iloc[-1])
-        if ema <= 0:
-            return True
-        dist = abs(price - ema) / ema
-        # Within 0.12% of EMA21 counts as pullback zone on majors
-        return dist <= 0.0012
+        atr = self._cursor_atr(df)
+        if ema <= 0 or not atr or atr <= 0:
+            return False
+        dist_atr = abs(price - ema) / atr
+        if dist_atr > 0.5:
+            return False
+        # Prefer pullback from the trade side of EMA
+        if direction == SignalDirection.BUY and price > ema * 1.0008:
+            return False
+        if direction == SignalDirection.SELL and price < ema * 0.9992:
+            return False
+        return True
+
+    def _cursor_chase_blocked(self, df, direction: SignalDirection, price: float) -> bool:
+        """Reject longs near swing high / shorts near swing low (anti-chase)."""
+        atr = self._cursor_atr(df)
+        if not atr or atr <= 0 or "high" not in df.columns or "low" not in df.columns:
+            return False
+        look = min(48, len(df))
+        swing_high = float(df["high"].astype(float).tail(look).max())
+        swing_low = float(df["low"].astype(float).tail(look).min())
+        if direction == SignalDirection.BUY:
+            return (swing_high - price) / atr <= 0.35
+        return (price - swing_low) / atr <= 0.35
+
+    def _cursor_priority_blocks(self, plan: DailyPlan, symbol: str) -> bool:
+        """True if a higher-priority plan symbol is still unfilled and eligible."""
+        order = plan.prefer_order() if hasattr(plan, "prefer_order") else list(plan.pairs or [])
+        if symbol not in order:
+            # setups may define priority without being first in pairs
+            setups = sorted(plan.setups or [], key=lambda s: int(getattr(s, "priority", 1) or 1))
+            order = [s.symbol for s in setups] or list(plan.pairs or [])
+        if symbol not in order:
+            return False
+        idx = order.index(symbol)
+        for higher in order[:idx]:
+            if higher in self._cursor_filled_symbols:
+                continue
+            # Higher priority still waiting — block this symbol
+            if higher in (plan.pairs or []):
+                return True
+        return False
 
     async def _execute_cursor_directed(
         self, symbol: str, df, plan: DailyPlan, price: float, epoch: int
@@ -678,6 +729,24 @@ class TradingBot:
         if symbol in self._cursor_filled_symbols:
             return
 
+        if self._cursor_priority_blocks(plan, symbol):
+            self._record_analysis(
+                symbol,
+                price=price,
+                regime="cursor_plan",
+                rsi=0.0,
+                atr=0.0,
+                epoch=epoch,
+                bars=len(df),
+                best_strategy="cursor_execute",
+                confidence=float(plan.confidence),
+                skip_reason="awaiting_higher_priority_symbol",
+                signal_direction=None,
+                pipeline="cursor_execute",
+                gates={"passed": [], "failed": ["awaiting_higher_priority_symbol"]},
+            )
+            return
+
         setup = self._cursor_setup_for(plan, symbol)
         if setup is not None:
             direction = SignalDirection.BUY if setup.direction == "buy" else SignalDirection.SELL
@@ -696,6 +765,24 @@ class TradingBot:
             tp_pips = plan.tp_pips
             rationale = plan.review or plan.notes
 
+        if self._cursor_chase_blocked(df, direction, price):
+            self._record_analysis(
+                symbol,
+                price=price,
+                regime="cursor_plan",
+                rsi=0.0,
+                atr=0.0,
+                epoch=epoch,
+                bars=len(df),
+                best_strategy="cursor_execute",
+                confidence=float(plan.confidence),
+                skip_reason="anti_chase_swing",
+                signal_direction=direction.value,
+                pipeline="cursor_execute",
+                gates={"passed": ["cursor_thesis"], "failed": ["anti_chase_swing"]},
+            )
+            return
+
         if entry_style == "pullback" and not self._near_ema21_pullback(df, direction, price):
             self._record_analysis(
                 symbol,
@@ -707,10 +794,10 @@ class TradingBot:
                 bars=len(df),
                 best_strategy="cursor_execute",
                 confidence=float(plan.confidence),
-                skip_reason="awaiting_pullback_ema21",
+                skip_reason="awaiting_pullback_ema21_atr",
                 signal_direction=direction.value,
                 pipeline="cursor_execute",
-                gates={"passed": ["cursor_thesis"], "failed": ["awaiting_pullback_ema21"]},
+                gates={"passed": ["cursor_thesis"], "failed": ["awaiting_pullback_ema21_atr"]},
             )
             return
 
@@ -746,8 +833,12 @@ class TradingBot:
             suggested_tp=tp,
             sl_tp_method="cursor_plan_pips",
             bias_id=f"cursor-{plan.date}-{symbol}",
-            feature_json={"review": plan.review, "notes": plan.notes},
-            gates={"passed": ["cursor_thesis", f"entry:{entry_style}"], "failed": []},
+            feature_json={
+                "review": plan.review,
+                "notes": plan.notes,
+                "analysis": plan.analysis.model_dump() if plan.analysis else None,
+            },
+            gates={"passed": ["cursor_thesis", f"entry:{entry_style}", "anti_chase"], "failed": []},
         )
 
         self._record_analysis(
@@ -763,10 +854,9 @@ class TradingBot:
             skip_reason=None,
             signal_direction=direction.value,
             pipeline="cursor_execute",
-            gates={"passed": ["cursor_thesis", f"entry:{entry_style}"], "failed": []},
+            gates={"passed": ["cursor_thesis", f"entry:{entry_style}", "anti_chase"], "failed": []},
         )
 
-        # Cap plan.max_trades_today via temporary risk day limit
         prev_max = self.risk.max_trades_per_day
         try:
             self.risk.max_trades_per_day = int(plan.max_trades_today)
